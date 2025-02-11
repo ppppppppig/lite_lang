@@ -1,0 +1,4 @@
+*.nsys-rep
+*.sqlite
+*.ncu-rep
+third_party
