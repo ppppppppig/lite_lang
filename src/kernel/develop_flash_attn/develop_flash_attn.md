@@ -60,8 +60,11 @@ ncu --target-processes all --set full -o flash_attn_test python flash_attn_v2.py
 我分别收集了BLOCK=16, 31, 64的flash_attn算子性能数据，发现BLOCK的大小对flash_attn算子的性能影响较大, BLOCK=16的推理时间最长，其次是BLOCK32，最优是BLOCK64，当BLOCK=128是，GPU提示SM资源不足。
 
 **BLOCK=64的性能数据**
+
 ![BLOCK=64](./images/block64.png)
+
 **BLOCK=32的性能数据**
+
 ![BLOCK=32](./images/block32.png)
 
 所以为了使算子有最佳性能，要使BLOCK = math.floor(SM_SHM_SIZE // element_type_size // HEAD_DIM), 因为找不到接口直接获取SM_SHM_SIZE， 于是使用triton.autotune接口，测试哪一种BLOCK大小推理速度更快。
