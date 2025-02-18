@@ -12,6 +12,8 @@
 
 2.减少了大量的kernel launch时间，优化整体的执行速度
 
+同样的，cuda graph中也存在限制，最大的限制是，cuda graph只允许固定的输入输出，在llm的实际应用中，因为prefill阶段变化太多，一般只在decode阶段使用（seq不变，只变batch），这样可以预先定义多组cuda graph，然后推理阶段在选择cuda grap。(每组cuda grap都会占用更多显存，所以一般不会预定义太多的cuda graph，通过padding的方式将batch补过去)
+
 ### 2.使用nsight system查看性能数据
 
 #### 2.1 安装nsys cli，获取统计数据
