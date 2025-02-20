@@ -1,13 +1,20 @@
 import torch
 import triton.language as tl
 import triton
+from triton.runtime import driver
+
+device = torch.device("cuda:0")
+props = torch.cuda.get_device_properties(device)
+NUM_SM = props.multi_processor_count
 
 def torch_rmsnorm(x, gamma, variance_epilson):
     x = x.to(torch.float32)
     gamma = gamma.to(torch.float32)
-    variance = torch.sum(x * x, dim=-1) / x.size(-1)
+    variance = torch.sum(x * x, dim=-1, keepdim=True) / x.size(-1)
     middle = x / torch.sqrt(variance + variance_epilson)
-    res = torch.matmul(middle, gamma)
+    res = middle * gamma
+    print(f"11: {res}")
+    return res
 
 @triton.jit
 def rmsnorm_kernel(x_ptr, gamma_ptr, out_ptr, variance_epsilon,
@@ -17,17 +24,28 @@ def rmsnorm_kernel(x_ptr, gamma_ptr, out_ptr, variance_epsilon,
                    gamma_size_x,
                    BLOCK: tl.constexpr):
     pid = tl.program_id(0)
+    num_pros = tl.num_programs(0)
     
-    input_m_offsets = pid * BLOCK + tl.arange(0, BLOCK)
-    x_input = tl.load(x_ptr + input_m_offsets * x_stride_0, mask=(input_m_offsets < x_size_x), other=-float('inf'))
-    pow = x_input * x_input
-    sum = tl.sum(pow, axis=0)
-    variance = sum / x_size_y
-    middle = x_input / tl.sqrt(variance + variance_epsilon)
-    gamma_input = tl.load(gamma_ptr)
-    res = middle * gamma_input
-    tl.store(res, out_ptr + input_m_offsets[:, None] * x_stride_0 , mask=input_m_offsets < x_size_x)
+    for i in range(pid, x_size_x, num_pros):
+        
+        x = tl.load(x_ptr +  i * x_stride_0 + tl.arange(0, BLOCK) * x_stride_1, mask=tl.arange(0, BLOCK) < x_size_y, other=0).to(tl.float32)
+        
+        gamma = tl.load(gamma_ptr + tl.arange(0, BLOCK) * gamma_stride_0, mask=tl.arange(0, BLOCK) < gamma_size_x, other=0).to(tl.float32)
+        sum = tl.sum(x * x) / x_size_y
+        middle = x / tl.sqrt(sum + variance_epsilon)
+        out = middle * gamma
+        out = out.to(x_ptr.dtype.element_ty)
+        tl.static_print(out.dtype)
+        tl.store( out_ptr + i * x_stride_0 + tl.arange(0, BLOCK) * x_stride_1,out,  mask=tl.arange(0, BLOCK) < x_size_y)
 
+
+def next_pow_of_2(n: int):
+    if n < 0:
+        return 1
+    elif (n and (n - 1)) == 0:
+        return n
+    else:
+        return 1 << (n - 1).bit_length()
 
 def rmsnorm(x, gamma, variance_epsilon):
     assert x.shape[1] == gamma.shape[0], \
@@ -35,12 +53,13 @@ def rmsnorm(x, gamma, variance_epsilon):
     
     assert x.ndim == 2, "shapesize shoule equal to 2"
     
-    block = 32
+    block = next_pow_of_2(x.size(-1))
     out = torch.empty_like(x)
     
-    grid = (((x.shape[0] + block - 1) // block),)
     
-    rmsnorm_kernel[grid](
+    grid = NUM_SM
+    
+    rmsnorm_kernel[grid,](
         x, gamma, out, variance_epsilon,
         x.stride(0), x.stride(1),
         gamma.stride(0),
@@ -49,12 +68,13 @@ def rmsnorm(x, gamma, variance_epsilon):
         num_stages=3, num_warps=4,
         BLOCK=block
     )
+    print(f"out: {out}")
     return out
 
 
 def test_rmsnorm(M, N, variance_epsilon=1e-5):
-    x = torch.normal(size=(M, N), mean=0.3, std=0.5)
-    gamma = torch.normal(size=(N,), mean=0.3, std=0.5)
+    x = torch.normal(size=(M, N), mean=0.3, std=0.5, device="cuda", dtype=torch.float32)
+    gamma = torch.normal(size=(N,), mean=0.3, std=0.5, device="cuda", dtype=torch.float32)
     
     res1 = torch_rmsnorm(x, gamma, variance_epsilon)
     
@@ -64,4 +84,4 @@ def test_rmsnorm(M, N, variance_epsilon=1e-5):
     
     assert torch.allclose(res1, res2, atol=1e-3), "diff large"
     
-test_rmsnorm(2048, 2048)
+test_rmsnorm(100, 2048)
