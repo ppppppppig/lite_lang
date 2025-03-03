@@ -13,7 +13,6 @@ def torch_rmsnorm(x, gamma, variance_epilson):
     variance = torch.sum(x * x, dim=-1, keepdim=True) / x.size(-1)
     middle = x / torch.sqrt(variance + variance_epilson)
     res = middle * gamma
-    print(f"11: {res}")
     return res
 
 @triton.jit
