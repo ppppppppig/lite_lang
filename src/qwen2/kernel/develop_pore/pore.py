@@ -160,7 +160,7 @@ def rotary_emb_fwd(q, k, cos, sin, partial_rotary_factor=1.):
     return
 
 
-def torch_rotary_emb(x: torch.Tensor, theta: int = 10000):
+def compute_rotary_emb(x: torch.Tensor, theta: int = 10000):
     
     nd, nh, hz = x.shape
     device = x.device
@@ -181,20 +181,37 @@ def torch_rotary_emb(x: torch.Tensor, theta: int = 10000):
     
     res = torch.cat([y1, y2], dim=-1)
     return res
+
+def torch_rotary_emb(x, cos, sin):
+    seq_len, h, dim = x.shape
+
+    x0 = x[:, :, 0 : dim // 2]
+    x1 = x[:, :, dim // 2 : dim]
+    cos = cos.view((seq_len, 1, dim // 2))
+    sin = sin.view((seq_len, 1, dim // 2))
+    o0 = x0 * cos - x1 * sin
+    o1 = x0 * sin + x1 * cos
+    return torch.cat((o0, o1), dim=-1)
     
 def test_rotary_emb(SEQ_LEN, H, D, dtype, eps=1e-5, device="cuda"):
-    # create data
+    # Create data
     x_shape = (SEQ_LEN, H, D)
-    x = torch.normal(x_shape, mean=0.0, std=0.5)
-    cos_shape = (SEQ_LEN, D // 2)
-    cos = -1.2 + 0.5 * torch.randn(cos_shape, dtype=dtype, device="cuda")
-    sin = -2.0 + 0.5 * torch.randn(cos_shape, dtype=dtype, device="cuda")
-    # forward pass
-    y_tri = torch_rotary_emb(x, cos, sin)
-    rotary_emb_fwd(x, cos, sin)
-    y_ref = x
+    x = torch.normal(mean=0.0, std=0.3, size=x_shape, dtype=dtype, device=device)
 
-    # compare
-    print("type:", y_tri.dtype, y_ref.dtype)
-    print("max delta:", torch.max(torch.abs(y_tri - y_ref)))
-    assert torch.allclose(y_tri, y_ref, atol=1e-2, rtol=0)
+    # Initialize cos and sin with reasonable ranges
+    cos_shape = (SEQ_LEN, D // 2)
+    cos = torch.randn(cos_shape, dtype=dtype, device=device).clamp(-1, 1)  # Clamp to [-1, 1]
+    sin = torch.randn(cos_shape, dtype=dtype, device=device).clamp(-1, 1)  # Clamp to [-1, 1]
+
+    x_copy = x.clone()
+    # Forward pass
+    y_tri = torch_rotary_emb(x, cos, sin)  # Assume this is your implementation
+    rotary_emb_fwd(x, x_copy, cos, sin)    # Assume this is a reference implementation
+    # Compare
+    print("type:", y_tri.dtype, x_copy.dtype)
+    print("max delta:", torch.max(torch.abs(y_tri - x_copy)).item())
+
+    # Check if the results are close
+    assert torch.allclose(y_tri, x_copy, atol=1e-3, rtol=0), "Results do not match within tolerance"
+    
+test_rotary_emb(1000, 32, 128, torch.float16)
