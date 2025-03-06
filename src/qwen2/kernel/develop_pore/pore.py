@@ -19,7 +19,7 @@ def _rotary_kernel(
     stride_kh,
     stride_kd,
     stride_cosbs,
-    stride_cosd,
+    stride_cosd,    
     stride_sinbs,
     stride_sind,
     max_total_len,
