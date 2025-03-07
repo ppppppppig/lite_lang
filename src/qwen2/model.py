@@ -1,5 +1,5 @@
 import torch
-from layer import Qwen2TransformerLayer, Qwen2PreLayer, Qwen2PostLayer
+from .layer import Qwen2TransformerLayer, Qwen2PreLayer, Qwen2PostLayer
 
 class Qwen2Model:
     
@@ -16,14 +16,19 @@ class Qwen2Model:
     def forward(self, input_tokens):
         hidden_states = self.pre_layer.forward(input_tokens)
         for i in self.layers:
-            hidden_states = self.layers.forward(hidden_states, self.position_embeddings)
+            hidden_states = self.layers[i].forward(hidden_states, self.position_embeddings)
         output_tokens = self.post_layer.forward(input_tokens)
         return output_tokens
 
     def load_weight(self, model_path):
         from safetensors.torch import load_file
 
-        data_dict = load_file(model_path, device="cpu")
+        # data_dict = load_file(model_path, device="cpu")
+        # 这个读取权重的写的不是很好，后面要细化一下
+        import os
+        weight_path = os.path.join(model_path, "model.safetensors")
+        data_dict = load_file(weight_path)
+        print(f"data_dict: {data_dict}")
         self.pre_layer.pre_layer_weight.init(data_dict)
         for layer in self.layers:
             layer.layer_weight.init(data_dict)

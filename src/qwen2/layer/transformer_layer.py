@@ -1,5 +1,5 @@
 import torch
-from ..layer_weights.load_weights import Qwen2LayerWeight
+from qwen2.layer_weights.load_weights import Qwen2LayerWeight
 
 class Qwen2TransformerLayer:
     

@@ -12,9 +12,8 @@ class LayerNormWeight:
         self.bias = weights[proj_name].cuda()
 
 class Qwen2LayerWeight:
-    def __init__(self, layer_num, device):
+    def __init__(self, layer_num):
         self.layer_num_ = layer_num
-        self.device_ = device
         self.model_type_ = "qwen2.5"
         
     def _init_qkv(self, weights):
@@ -30,13 +29,10 @@ class Qwen2LayerWeight:
         o_proj_name = f"model.layers.{self.layer_num_}.self_attn.o_proj.weight"
         o_bias_name = f"model.layers.{self.layer_num_}.self_attn.o_proj.bias"
         
-        qkv_keys = []
-        qkv_keys.append(q_proj_name, q_bias_name, k_proj_name, k_bias_name, v_proj_name, v_bias_name)
-        
-        self.q_proj = MMWeight(weights, q_proj_name, q_bias_name, device=self.device_)
-        self.k_proj = MMWeight(weights, k_proj_name, k_bias_name, device=self.device_)
-        self.v_proj = MMWeight(weights, v_proj_name, v_bias_name, device=self.device_)
-        self.v_proj = MMWeight(weights, o_proj_name, o_bias_name, device=self.device_)
+        self.q_proj = MMWeight(weights, q_proj_name, q_bias_name)
+        self.k_proj = MMWeight(weights, k_proj_name, k_bias_name)
+        self.v_proj = MMWeight(weights, v_proj_name, v_bias_name)
+        self.v_proj = MMWeight(weights, o_proj_name, o_bias_name)
         
     def _init_input_layernorm(self, weights):
         layernorm_weight = f"model.layers.{self.layer_num_}.input_layernorm.weight"
@@ -52,7 +48,7 @@ class Qwen2LayerWeight:
         
     def _init_ffn(self, weights):
         gate_weight = f"model.layers.{self.layer_num_}.mlp.gate_proj.weight"
-        down_weight = f"model.layers.{self.layer_num_}.mlp.dodwn_proj.weight"
+        down_weight = f"model.layers.{self.layer_num_}.mlp.down_proj.weight"
         up_weight = f"model.layers.{self.layer_num_}.mlp.up_proj.weight"
         
         self.down_proj = weights[down_weight].cuda()

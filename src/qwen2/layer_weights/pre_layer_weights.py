@@ -3,8 +3,7 @@ import torch
 
 
 class Qwen2PreLayerWeight:
-    def __init__(self, device):
-        self.device_ = device
+    def __init__(self):
         self.model_type_ = "qwen2.5"
     
     def _init_input_embds(self, weights):
