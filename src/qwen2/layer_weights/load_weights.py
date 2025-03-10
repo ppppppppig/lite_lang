@@ -4,12 +4,13 @@ import torch
 class MMWeight:
     def __init__(self, weights, proj_name, bias_name):
         self.proj = weights[proj_name].cuda()
-        self.bias = weights[proj_name].cuda()
+        self.bias = weights[bias_name].cuda() if bias_name in weights else None
         
 class LayerNormWeight:
     def __init__(self, weights, proj_name, bias_name):
         self.proj = weights[proj_name].cuda()
-        self.bias = weights[proj_name].cuda()
+        
+        self.bias = weights[bias_name].cuda() if bias_name in weights else None
 
 class Qwen2LayerWeight:
     def __init__(self, layer_num):
@@ -32,7 +33,7 @@ class Qwen2LayerWeight:
         self.q_proj = MMWeight(weights, q_proj_name, q_bias_name)
         self.k_proj = MMWeight(weights, k_proj_name, k_bias_name)
         self.v_proj = MMWeight(weights, v_proj_name, v_bias_name)
-        self.v_proj = MMWeight(weights, o_proj_name, o_bias_name)
+        self.o_proj = MMWeight(weights, o_proj_name, o_bias_name)
         
     def _init_input_layernorm(self, weights):
         layernorm_weight = f"model.layers.{self.layer_num_}.input_layernorm.weight"

@@ -6,7 +6,7 @@ class Qwen2PostLayer:
     def __init__(self):
         self.post_layer_weight = Qwen2PostLayerWeight()
         
-    def forward(self, hidden_states):
+    def Forward(self, hidden_states):
         logits = hidden_states @ self.post_layer_weight.lm_head
         return self._PostProcess(logits)
         

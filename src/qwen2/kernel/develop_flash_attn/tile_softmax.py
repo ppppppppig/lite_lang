@@ -21,7 +21,6 @@ all_softmax_tensor = torch.empty_like(test_tensor)
 
 test_tensor_block1 = torch.tensor([1], dtype=torch.float32)
 m_pre, l_pre = update_softmax_block(test_tensor_block1, m_pre, l_pre, all_softmax_tensor, 0)
-print(f"block 1 : {all_softmax_tensor}")
 
 # Block 2
 test_tensor_block2 = torch.tensor([2], dtype=torch.float32)

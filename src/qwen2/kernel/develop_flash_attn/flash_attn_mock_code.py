@@ -53,9 +53,6 @@ def test_flash_v2():
 
     # 执行标准的PyTorch softmax和attention计算
     expected_attention = MhaAttn(Q_mat, K_mat, V_mat)
-    print(flash_attention_v2_output)
-    print(expected_attention)
-    print(f"output diff: {expected_attention - flash_attention_v2_output}")
     # 断言flash attention计算的结果与标准计算结果是否接近
     assert torch.allclose(flash_attention_v2_output, expected_attention, atol=1e-07), "Error in flash attention calculation"
 

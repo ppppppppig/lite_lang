@@ -3,15 +3,19 @@ from qwen2.layer_weights.load_weights import Qwen2LayerWeight
 
 class Qwen2TransformerLayer:
     
-    def __init__(self, layer_num):
+    def __init__(self, layer_num, num_heads, head_dim, num_key_value_heads):
         self.layer_weight = Qwen2LayerWeight(layer_num)
+        self.num_heads_ = num_heads
+        self.head_dim_ = head_dim
+        self.num_key_value_heads_ = num_key_value_heads
+        self.rep_times_ = self.num_heads_ // self.num_key_value_heads_
         self.eps = 1e-3
         
     def Forward(self, hidden_states: torch.Tensor, position_embeddings: torch.Tensor):
         residual = hidden_states
-        hidden_states = self._InputLayernorm(input)
-        hidden_states = self._QkvCompute(hidden_states, position_embeddings)
-        hidden_states = self._ComputeAttnScore(hidden_states)
+        hidden_states = self._InputLayernorm(hidden_states)
+        q, k, v = self._QkvCompute(hidden_states)
+        hidden_states = self._ComputeAttnScore(q, k, v, position_embeddings)
         hidden_states = residual + hidden_states
         residual = hidden_states
         hidden_states = self._FfnNorm(hidden_states)
@@ -20,53 +24,68 @@ class Qwen2TransformerLayer:
         return hidden_states
         
     def _Ffn(self, hidden_states):
-        hidden_states = torch.nn.functional.silu(self.layer_weight.gate_proj @ hidden_states * self.layer_weight.up_proj @ hidden_states)
-        hidden_states = self.layer_weight.down_proj @ hidden_states
+        hidden_states = torch.nn.functional.silu((hidden_states @ self.layer_weight.gate_proj.transpose(-2, -1)) * 
+                                                 (hidden_states @ self.layer_weight.up_proj.transpose(-2, -1)))
+        hidden_states = hidden_states @ self.layer_weight.down_proj.transpose(-2, -1)
         return hidden_states
 
+    # 要求输入[batch_size, seq_len, hidden_size]
     def _InputLayernorm(self, input):
         denominator = torch.sqrt(torch.sum(input * input, dim=-1) / input.size(-1) + self.eps)
-        res = input / denominator * self.layer_weight.layernorm.proj
+        res = input / denominator[..., None] * self.layer_weight.layernorm.proj
         return res
     
     def _FfnNorm(self, input):
         denominator = torch.sqrt(torch.sum(input * input, dim=-1) / input.size(-1) + self.eps)
-        res = input / denominator * self.layer_weight.post_attn_layernorm.proj
+        res = input / denominator[..., None] * self.layer_weight.post_attn_layernorm.proj
         return res
     
     def _QkvCompute(self, input):
-        q = input @ self.layer_weight.q_proj.proj + self.layer_weight.q_proj.bias
-        k = input @ self.layer_weight.k_proj.proj + self.layer_weight.k_proj.bias
-        v = input @ self.layer_weight.v_proj.proj + self.layer_weight.v_proj.bias
+        q = input @ self.layer_weight.q_proj.proj.transpose(-2, -1) + self.layer_weight.q_proj.bias
+        k = input @ self.layer_weight.k_proj.proj.transpose(-2, -1) + self.layer_weight.k_proj.bias
+        v = input @ self.layer_weight.v_proj.proj.transpose(-2, -1) + self.layer_weight.v_proj.bias
         return q, k, v
     
     def _ComputeQK(self, q, k, cos, sin):
-        seq_len, h, dim = q.shape
+        batch, h, seq_len, dim = q.shape
 
-        cos_seqlen = cos[:seq_len, 1, dim // 2]
-        sin_seqlen = sin[:seq_len, 1, dim // 2]
+        cos_seqlen = cos[:seq_len, :]
+        sin_seqlen = sin[:seq_len, :]
 
-        q0 = q[:, :, 0 : dim // 2]
-        q1 = q[:, :, dim // 2 : dim]
-        o0 = q0 * cos_seqlen - q1 * sin_seqlen
-        o1 = q0 * sin_seqlen + q1 * cos_seqlen
+        q0 = q[:, :, :, 0 : dim // 2]
+        q1 = q[:, :, :, dim // 2 : dim]
+        o0 = q0 * cos_seqlen[None, None, :, :] - q1 * sin_seqlen[None, None, :, :]
+        o1 = q0 * sin_seqlen[None, None, :, :] + q1 * cos_seqlen[None, None, :, :]
         q_after = torch.cat((o0, o1), dim=-1)
         
-        k0 = k[:, :, 0 : dim // 2]
-        k1 = k[:, :, dim // 2 : dim]
-        o0 = k0 * cos_seqlen - k1 * sin_seqlen
-        o1 = k0 * sin_seqlen + k1 * cos_seqlen
+        k0 = k[:, :, :, 0 : dim // 2]
+        k1 = k[:, :, :, dim // 2 : dim]
+        o0 = k0 * cos_seqlen[None, None, :, :] - k1 * sin_seqlen[None, None, :, :]
+        o1 = k0 * sin_seqlen[None, None, :, :] + k1 * cos_seqlen[None, None, :, :]
         k_after = torch.cat((o0, o1), dim=-1)
         return q_after, k_after
     
+    def repeat_kv(self, te):
+        b, h, s, d = te.size(0), te.size(1), te.size(2), te.size(3)
+        te =  te[:, :, None, :, :].expand(b, h, self.rep_times_, s, d)
+        return te.reshape(b, h * self.rep_times_, s, d)
+        
+    
     def _ComputeAttnScore(self, q, k, v, position_embeddings):
+        hidden_states_shape = q.shape
+        q = q.reshape(q.size(0), q.size(1), self.num_heads_, self.head_dim_).transpose(1, 2)
+        k = k.reshape(k.size(0), k.size(1), self.num_key_value_heads_, self.head_dim_).transpose(1, 2)
+        v = k.reshape(v.size(0), v.size(1), self.num_key_value_heads_, self.head_dim_).transpose(1, 2)
         cos, sin = position_embeddings
-        q, k = self._computeQK(q, k, cos, sin)
+        q, k = self._ComputeQK(q, k, cos, sin)
+        k = self.repeat_kv(k)
+        v = self.repeat_kv(v)
         qk = q @ k.transpose(-2, -1)
         
         # 需要计算q和k的旋转位置编码，将位置信息编码进来，这里没写
         qk = qk / q.size(-1) ** 0.5
         qk = torch.softmax(qk, dim=-1)
         attn_score = qk @ v
+        attn_score = attn_score.transpose(-2, -1).reshape(*hidden_states_shape)
         return attn_score
     

@@ -6,7 +6,6 @@ class Qwen2PostLayerWeight:
         self.model_type_ = "qwen2.5"
     
     def _init_lm_head(self, weights):
-        print(f"weights: {weights.keys()}")
         lm_head_name = f"model.norm.weight"
         self.lm_head = weights[lm_head_name].cuda()
         

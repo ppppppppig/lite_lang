@@ -13,10 +13,10 @@ def test(model_path, device):
     config_path = os.path.join(model_path, 'config.json')
     config = Qwen2Config(config_path)
     max_req_length = 1024
-    model = Qwen2Model(config.layer_nums, max_req_length, config.hidden_size)
+    model = Qwen2Model(config.layer_nums, max_req_length, config)
     model.load_weight(model_path)
 
-    mock_input_token = [23, 24, 25]
+    mock_input_token = torch.tensor([[23, 24, 25], [23, 24, 25]])
     output_token = model.forward(mock_input_token)
     print(f"output_token: {output_token}")
 
@@ -42,7 +42,6 @@ def perf_test(model_path, device):
     torch.cuda.synchronize()
     ed_time = time.perf_counter()
     print(f"spend time is : {ed_time - st_time}")
-    
     
     print(f"output_token: {output_token}")
     
