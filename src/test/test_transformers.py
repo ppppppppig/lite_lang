@@ -12,7 +12,7 @@ device = "cuda" if torch.cuda.is_available() else "cpu"
 model = model.to(device)
 
 # 输入字符串
-input_text = "我爱中国"
+input_text = "请写一段故事, 关于爱和和平"
 
 # 对输入字符串进行编码
 inputs = tokenizer(input_text, return_tensors="pt")
