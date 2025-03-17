@@ -9,9 +9,9 @@ class Req:
     prompt: str
     max_length: int
     max_output_length: int
+    output_prompt_que: queue.Queue
     input_length: int = 0
     output_length: int = 0
-    output_prompt_que = queue.Queue()
     is_end: bool = False
     
     def Add(self, text: str, is_eos_token):
@@ -68,7 +68,7 @@ class ReqManager:
         self.max_id = 100000
         
     def Add(self, prompt):
-        req = Req(id=self.now_id % self.max_id, prompt=prompt, max_length=1024, max_output_length=1024)
+        req = Req(id=self.now_id % self.max_id, prompt=prompt, max_length=1024, max_output_length=1024, output_prompt_que=queue.Queue())
         self.now_id += 1
         self.reqs.put(req)
         return req
