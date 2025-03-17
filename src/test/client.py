@@ -2,10 +2,14 @@ import requests
 import json
 
 # 定义请求参数
-url = "http://localhost:8000/generate"
-stream_url = "http://localhost:8000/generate_stream"
+url = "http://localhost:8080/generate"
+stream_url = "http://localhost:8080/generate_stream"
 payload = {
-    "prompt": "请写一首关于春天的诗"
+    "prompt": "请写一首关于春天的诗",
+    "top_p": 0.8,
+    "top_k": 20,
+    "temperature": 10,
+    "do_sample": True
 }
 
 # 普通请求函数（保持原有）

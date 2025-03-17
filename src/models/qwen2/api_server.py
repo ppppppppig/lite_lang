@@ -12,15 +12,25 @@ class GObjs:
     http_server_manager: HttpServerManager = None
     app: FastAPI = None
     
+    default_temperature = 1.0
+    default_top_p = 1.0
+    default_top_k = 1
+    default_do_sample = False
+    
 app = FastAPI()
 g_objs = GObjs(app=app)
 
 class GenerateRequest(BaseModel):
+    top_p: float = g_objs.default_top_p
+    temperature: float = g_objs.default_temperature
+    top_k: int = g_objs.default_top_k
+    do_sample: bool = g_objs.default_do_sample
     prompt: str
 
 @app.post("/generate")
 def generate(request: GenerateRequest):
-    generator = g_objs.http_server_manager.generate(request.prompt)
+    temp = request.get()
+    generator = g_objs.http_server_manager.generate(request.prompt, request.top_p, request.top_k, request.temperature, request.do_sample)
     output_prompts = []
     
     for text in generator:
@@ -29,7 +39,7 @@ def generate(request: GenerateRequest):
 
 @app.post("/generate_stream")
 def generate_stream(request: GenerateRequest) -> Generator[dict, None, None]: 
-    generator = g_objs.http_server_manager.generate(request.prompt)
+    generator = g_objs.http_server_manager.generate(request.prompt, request.top_p, request.top_k, request.temperature, request.do_sample)
     
     def stream_results() -> Generator[bytes, None, None]: 
         for text in generator:

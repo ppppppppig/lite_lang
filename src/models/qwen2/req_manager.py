@@ -7,16 +7,20 @@ from .cache import Cache, NormalCache
 class Req:
     id: int
     prompt: str
-    max_length: int
+    max_total_length: int
     max_output_length: int
     output_prompt_que: queue.Queue
+    temperature: float
+    top_p: float
+    top_k: float
+    do_sample: bool
     input_length: int = 0
     output_length: int = 0
     is_end: bool = False
     
     def Add(self, text: str, is_eos_token):
         self.output_length += 1
-        if is_eos_token or (self.output_length + self.input_length >= self.max_length and self.output_length >= self.max_output_length):
+        if is_eos_token or (self.output_length + self.input_length >= self.max_total_length and self.output_length >= self.max_output_length):
             self.is_end = True
         self.output_prompt_que.put((text, self.is_end))
 
@@ -41,6 +45,13 @@ class ModelInput:
         new_padding = torch.ones((self.padding_mask.size(0), 1), dtype=torch.bool).cuda()
         self.padding_mask = torch.cat([self.padding_mask, new_padding], dim=-1).cuda()
     
+    def GetPostSamplePara(self):
+        temperatures = torch.tensor([req.temperature for req in self.reqs]).cuda()
+        top_p = torch.tensor([req.top_p for req in self.reqs]).cuda()
+        top_k = torch.tensor([req.top_k for req in self.reqs]).cuda()
+        do_sample = torch.tensor([req.do_sample for req in self.reqs]).cuda()
+        return temperatures, top_p, top_k, do_sample
+    
     def ViewIsEnd(self):
         for req in self.reqs:
             if not req.is_end:
@@ -55,20 +66,22 @@ class ModelInput:
         input_len = length - padding_len
         for idx in range(input_len.size(0)):
             self.reqs[idx].input_length = input_len[idx].item()
-        
-        
-    
+
+
 class ReqManager:
-    def __init__(self, max_batch_size, tokenizer):
+    def __init__(self, max_batch_size, tokenizer, max_total_length, max_output_length):
         self.reqs = queue.Queue()
         self.padding_mask = None
         self.max_batch_size_ = max_batch_size
         self.tokenizer_ = tokenizer
         self.now_id = 0
         self.max_id = 100000
+        self.max_total_length_ = max_total_length
+        self.max_output_length_ = max_output_length
         
-    def Add(self, prompt):
-        req = Req(id=self.now_id % self.max_id, prompt=prompt, max_length=1024, max_output_length=1024, output_prompt_que=queue.Queue())
+    def Add(self, prompt, top_p, top_k, temperature, do_sample):
+        req = Req(id=self.now_id % self.max_id, prompt=prompt, max_total_length=self.max_total_length_,
+            max_output_length=self.max_output_length_, output_prompt_que=queue.Queue(), top_p=top_p, top_k=top_k, temperature=temperature, do_sample=do_sample)
         self.now_id += 1
         self.reqs.put(req)
         return req
@@ -102,4 +115,3 @@ class ReqManager:
         model_outputs.ViewIsEnd()
         return model_outputs
     
-        
