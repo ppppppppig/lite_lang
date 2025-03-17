@@ -34,7 +34,7 @@ def test(model_path, device):
         mask = torch.cat([mask, add_mask], dim=-1)
         all_tokens = torch.cat([all_tokens, output_token], dim=-1)
     output = my_tokenizer.decode(all_tokens)
-    print(f"output: {output}")
+
 
 
 def perf_test(model_path, device):
@@ -57,8 +57,5 @@ def perf_test(model_path, device):
     output_token = model.forward(mock_prefill_tensor)
     torch.cuda.synchronize()
     ed_time = time.perf_counter()
-    print(f"spend time is : {ed_time - st_time}")
-    
-    print(f"output_token: {output_token}")
     
 test("/root/LiteLang/models/Qwen2-1.5B", "cuda:2")

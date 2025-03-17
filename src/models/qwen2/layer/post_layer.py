@@ -9,8 +9,10 @@ class Qwen2PostLayer:
         self.eps = 1e-6
         
     def Forward(self, hidden_states):
-        hidden_states = self._InputLayernorm(hidden_states)
-        logits = hidden_states @ self.post_layer_weight.lm_head.transpose(-2, -1)
+
+        will_compute_hidden_states = hidden_states[:, -1, :][:, None, :]
+        will_compute_hidden_states = self._InputLayernorm(will_compute_hidden_states)
+        logits = will_compute_hidden_states @ self.post_layer_weight.lm_head.transpose(-2, -1)
         return self._PostProcess(logits)
 
     def _InputLayernorm(self, input):

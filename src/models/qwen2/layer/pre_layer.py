@@ -12,9 +12,7 @@ class Qwen2PreLayer:
         self.position_embeddings = self._ComputePosition()
         
     def Forward(self, input_tokens):
-        print(f"input_tokens: {input_tokens}")
         hidden_states = self.pre_layer_weight.input_embds[input_tokens]
-        print(f"pre layer forward shape: {hidden_states.shape}")
         return hidden_states
         
     def _ComputePosition(self):

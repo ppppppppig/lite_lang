@@ -2,3 +2,7 @@
 *.sqlite
 *.ncu-rep
 third_party
+models/
+!*/models
+__pycache__
+

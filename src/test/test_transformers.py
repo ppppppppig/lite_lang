@@ -29,7 +29,3 @@ with torch.no_grad():
 outputs = outputs.cpu()
 # 解码输出
 decoded_output = tokenizer.decode(outputs[0], skip_special_tokens=True)
-
-# 输出最后一个字符
-print("生成的文本:", decoded_output)
-print("最后一个字符:", decoded_output[-1])
