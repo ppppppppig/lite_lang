@@ -1,0 +1,35 @@
+### 1.背景
+
+为了能够更加熟悉大语言模型推理框架的技术细节，从零开始编写大语言模型推理框架。
+
+### 2.支持模型类型
+
+| 模型类型    | 参数量 | 状态   | 备注                       |
+| ----------- | ------ | ------ | --------------------     |
+| qwen2  | 1.5B   | 已支持 |                           |
+| qwq  | 32B   | 未支持 |         预计v0.5版本支持                  |
+
+
+### 3.版本发布列表
+
+| 版本    | 功能 | 状态   |
+| ----------- | ------ | ------ |
+| v0.1  | 1.支持流式接口<br>2.支持qwen2-1.5B   | 已发布 |  
+| v0.2  | 开发rmsnorm/ffn/flash_attn/rope/flash_decoding等算子，大幅提高推理性能  | 正在开发中 |
+| v0.3  | 支持NoPadding输入 | 未开发 |
+| v0.4  | 支持多TP，支持qwq-32B模型部署 | 未开发 |
+| v0.5  | 支持连续批处理 | 未开发 |
+
+
+### 4.运行服务
+
+使用以下命令运行服务
+```
+python test/test_server.py --model-path [MODEL_PATH] --max-output-length 1024 \
+--max-input-length --max-batch-size 32 --device cuda device_id 0 --port 8080
+```
+
+使用一下命令测试服务是否正常：
+```
+bash test/start_multi_req.sh
+```
