@@ -48,11 +48,10 @@ def _attn_fwd_inner(acc, l_i, m_i, q,  #
         p = p.to(tl.float16)
         acc += tl.dot(p, v)
         # acc = acc_temp
-    #     # update m_i and l_i
+        # update m_i and l_i
         m_i = m_ij
         V_block_ptr = tl.advance(V_block_ptr, (BLOCK_N, 0))
         K_block_ptr = tl.advance(K_block_ptr, (0, BLOCK_N))
-    tl.static_print("end")
     return acc, l_i, m_i
 
 configs = [
@@ -196,13 +195,13 @@ def standard_softmax_attention(Q, K, V, sm_scale):
     return ref_out
     
 
-# 创建示例数据
-N_CTX, D_MODEL = 512, 64
-B, H = 16, 48
-SM_M = 101376
-dtype = torch.float16
-Q = torch.empty((B, H, N_CTX, D_MODEL), dtype=dtype, device="cuda").normal_(mean=0.1, std=0.2).requires_grad_()
-K = torch.empty((B, H, N_CTX, D_MODEL), dtype=dtype, device="cuda").normal_(mean=0.4, std=0.2).requires_grad_()
-V = torch.empty((B, H, N_CTX, D_MODEL), dtype=dtype, device="cuda").normal_(mean=0.3, std=0.2).requires_grad_()
-
-flash_attentionv2(Q, K, V, causal=True, sm_scale=1)
+if __name__ == "__main__":
+    # 创建示例数据
+    N_CTX, D_MODEL = 512, 64
+    B, H = 16, 48
+    SM_M = 101376
+    dtype = torch.float16
+    Q = torch.empty((B, H, N_CTX, D_MODEL), dtype=dtype, device="cuda").normal_(mean=0.1, std=0.2).requires_grad_()
+    K = torch.empty((B, H, N_CTX, D_MODEL), dtype=dtype, device="cuda").normal_(mean=0.4, std=0.2).requires_grad_()
+    V = torch.empty((B, H, N_CTX, D_MODEL), dtype=dtype, device="cuda").normal_(mean=0.3, std=0.2).requires_grad_()
+    flash_attentionv2(Q, K, V, causal=True, sm_scale=1)

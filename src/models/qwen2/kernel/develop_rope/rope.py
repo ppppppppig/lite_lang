@@ -118,10 +118,10 @@ def _rotary_kernel(
 
 
 @torch.no_grad()
-def rotary_emb_fwd(q, k, cos, sin, partial_rotary_factor=1.):
+def rotary_emb_fwd(q, k, cos, sin):
     total_len = q.shape[0]
     head_num_q, head_num_k = q.shape[1], k.shape[1]
-    head_dim = int(q.shape[2] * partial_rotary_factor)
+    head_dim = int(q.shape[2])
     assert q.shape[0] == cos.shape[0] and q.shape[0] == sin.shape[0], f"q shape {q.shape} cos shape {cos.shape}"
     assert k.shape[0] == cos.shape[0] and k.shape[0] == sin.shape[0], f"k shape {k.shape} cos shape {cos.shape}"
 
@@ -160,6 +160,7 @@ def rotary_emb_fwd(q, k, cos, sin, partial_rotary_factor=1.):
     return
 
 
+# 不预先计算cos和sin的情况
 def compute_rotary_emb(x: torch.Tensor, theta: int = 10000):
     
     nd, nh, hz = x.shape
@@ -213,5 +214,6 @@ def test_rotary_emb(SEQ_LEN, H, D, dtype, eps=1e-5, device="cuda"):
 
     # Check if the results are close
     assert torch.allclose(y_tri, x_copy, atol=1e-3, rtol=0), "Results do not match within tolerance"
-    
-test_rotary_emb(1000, 32, 128, torch.float16)
+
+if __name__ == "__main__":
+    test_rotary_emb(1000, 32, 128, torch.float16)

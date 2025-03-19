@@ -2,6 +2,8 @@ import torch
 from ..layer_weights.load_weights import Qwen2LayerWeight
 from ..cache import Cache, NormalCache
 from typing import Optional
+from ..kernel.develop_rope.rope import rotary_emb_fwd
+from ..kernel.develop_flash_attn.flash_attn_v2 import flash_attentionv2
 
 class Qwen2TransformerLayer:
     
@@ -50,23 +52,21 @@ class Qwen2TransformerLayer:
         return q, k, v
     
     def _ComputeQK(self, q, k, cos, sin, past_key_values):
-        batch, h, seq_len, dim = q.shape
+        batch, seq_len, _, dim = q.shape
+        
 
         last_input_length = past_key_values.GetInputLength(self.layer_idx_)
         cos_seqlen = cos[last_input_length:last_input_length + seq_len, :]
         sin_seqlen = sin[last_input_length:last_input_length + seq_len, :]
 
-        q0 = q[:, :, :, 0 : dim // 2]
-        q1 = q[:, :, :, dim // 2 : dim]
-        o0 = q0 * cos_seqlen[None, None, :, :] - q1 * sin_seqlen[None, None, :, :]
-        o1 = q0 * sin_seqlen[None, None, :, :] + q1 * cos_seqlen[None, None, :, :]
-        q_after = torch.cat((o0, o1), dim=-1)
+        q = q.reshape(batch * seq_len, -1, dim)
+        k = k.reshape(batch * seq_len, -1, dim) # GQA的头数有时不一致
         
-        k0 = k[:, :, :, 0 : dim // 2]
-        k1 = k[:, :, :, dim // 2 : dim]
-        p0 = k0 * cos_seqlen[None, None, :, :] - k1 * sin_seqlen[None, None, :, :]
-        p1 = k0 * sin_seqlen[None, None, :, :] + k1 * cos_seqlen[None, None, :, :]
-        k_after = torch.cat((p0, p1), dim=-1)
+        rotary_emb_fwd(q, k, cos_seqlen, sin_seqlen)
+        
+        q_after = q.reshape(batch, seq_len, -1, dim).transpose(1, 2)
+        k_after = k.reshape(batch, seq_len, -1, dim).transpose(1, 2)
+        
         return q_after, k_after
     
     def repeat_kv(self, te):
@@ -105,8 +105,8 @@ class Qwen2TransformerLayer:
 
     def _ComputeAttnScore(self, q, k, v, position_embeddings, mask, is_decode, past_key_values: Optional[Cache]):
         hidden_states_shape = q.shape
-        q = q.reshape(q.size(0), q.size(1), self.num_heads_, self.head_dim_).transpose(1, 2)
-        k = k.reshape(k.size(0), k.size(1), self.num_key_value_heads_, self.head_dim_).transpose(1, 2)
+        q = q.reshape(q.size(0), q.size(1), self.num_heads_, self.head_dim_)
+        k = k.reshape(k.size(0), k.size(1), self.num_key_value_heads_, self.head_dim_)
         v = v.reshape(v.size(0), v.size(1), self.num_key_value_heads_, self.head_dim_).transpose(1, 2)
         cos, sin = position_embeddings
         q, k = self._ComputeQK(q, k, cos, sin, past_key_values)
