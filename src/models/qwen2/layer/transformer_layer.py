@@ -53,7 +53,6 @@ class Qwen2TransformerLayer:
     
     def _ComputeQK(self, q, k, cos, sin, past_key_values):
         batch, seq_len, _, dim = q.shape
-        
 
         last_input_length = past_key_values.GetInputLength(self.layer_idx_)
         cos_seqlen = cos[last_input_length:last_input_length + seq_len, :]
