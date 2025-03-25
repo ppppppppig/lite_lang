@@ -10,8 +10,8 @@ import click
 
 @click.command()
 @click.option("--model-path", default="/root/LiteLang/models/Qwen2-1.5B/", help="权重路径")
-@click.option("--max-output-length", default=1024, type=int, help="最大输出长度")
-@click.option("--max-input-length", default=1024, type=int, help="最大输入长度")
+@click.option("--max-output-length", default=100, type=int, help="最大输出长度")
+@click.option("--max-input-length", default=200, type=int, help="最大输入长度")
 @click.option("--max-batch-size", default=32, type=int, help="最大batchsize")
 @click.option("--device", default='cuda', type=str, help="设备类型")
 @click.option("--device_id", default=3, type=int, help="设备ID")

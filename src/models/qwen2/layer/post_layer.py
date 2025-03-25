@@ -42,8 +42,7 @@ class Qwen2PostLayer:
         sample_ind = torch.multinomial(logits_sort, num_samples=1, replacement=True)
         output_tokens_sample = torch.gather(logits_idx, dim=-1, index=sample_ind)
         
-        output_tokens_argmax = logits_idx[:, 0]
-        
+        output_tokens_argmax = logits_idx[:, 0][:, None]
         output_tokens = torch.where(
             do_sample,
             output_tokens_sample,

@@ -42,7 +42,11 @@ class ModelInput:
         else:
             self.output_tokens = torch.cat([self.output_tokens, output_tokens], dim=-1)
         
-        new_padding = torch.ones((self.padding_mask.size(0), 1), dtype=torch.bool).cuda()
+        
+        new_padding = torch.ones((self.padding_mask.size(0), 1), dtype=torch.int).cuda()
+        for z in range(self.padding_mask.size(0)):
+            pos_num = self.padding_mask[z, -1].item()
+            new_padding[z, 0] = pos_num + 1
         self.padding_mask = torch.cat([self.padding_mask, new_padding], dim=-1).cuda()
     
     def GetPostSamplePara(self):
@@ -95,6 +99,16 @@ class ReqManager:
         prompts = [req.prompt for req in input_reqs]
         input_tokens, mask = self.tokenizer_.encode(prompts)
         
+        
+        for z in range(mask.size(0)):
+            first_one = 0
+            for h in range(mask.size(1)):
+                if mask[z, h] == 1:
+                    first_one = h
+                    break
+            mask[z, first_one:] = torch.arange(0, mask.size(1) - first_one).cuda()
+            mask[z, :first_one] = -1
+        
         model_inputs = ModelInput(
             reqs = input_reqs,
             input_tokens = input_tokens,
@@ -108,6 +122,7 @@ class ReqManager:
         
     def UpdateReq(self, model_outputs):
         output_tokens = model_outputs.output_tokens[:, -1]
+        print(f"output_tokens:{output_tokens}")
         output_prompts = self.tokenizer_.decode(output_tokens)
         for req_idx in range(len(output_prompts)):
             model_outputs.reqs[req_idx].Add(output_prompts[req_idx], output_tokens[req_idx] == self.tokenizer_.eos_token_id)

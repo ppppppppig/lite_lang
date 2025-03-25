@@ -59,17 +59,23 @@ class Qwen2TransformerLayer:
         v = input @ self.layer_weight.v_proj.proj.transpose(-2, -1).to(torch.float32) + self.layer_weight.v_proj.bias.to(torch.float32)
         return q, k, v
     
-    def _ComputeQK(self, q, k, cos, sin, past_key_values):
+    def _ComputeQK(self, q, k, cos, sin, past_key_values, mask):
         batch, seq_len, _, dim = q.shape
 
         last_input_length = past_key_values.GetInputLength(self.layer_idx_)
-        cos_seqlen = cos[last_input_length:last_input_length + seq_len, :]
-        sin_seqlen = sin[last_input_length:last_input_length + seq_len, :]
+        
+        mask_slice = mask[:, last_input_length:]
+        mask_slice = mask_slice % mask.size(1)
+        # 将负索引转换为非负索引
+        mask_one_dim = torch.flatten(mask_slice)
+        cos_seqlen = torch.index_select(cos, 0,  mask_one_dim)
+        sin_seqlen = torch.index_select(sin, 0, mask_one_dim)
 
         q = q.reshape(batch * seq_len, -1, dim)
         k = k.reshape(batch * seq_len, -1, dim) # GQA的头数有时不一致
+
         rotary_emb_fwd(q, k, cos_seqlen, sin_seqlen)
-        
+
         q_after = q.reshape(batch, seq_len, -1, dim).transpose(1, 2)
         k_after = k.reshape(batch, seq_len, -1, dim).transpose(1, 2)
         
@@ -111,13 +117,13 @@ class Qwen2TransformerLayer:
 
     def _ComputeAttnScore(self, q, k, v, position_embeddings, mask, is_decode, past_key_values: Optional[Cache]):
         hidden_states_shape = q.shape
-        padding_mask = mask == 1
+        padding_mask = mask >= 0
         padding_mask = padding_mask.cuda()
         q = q.reshape(q.size(0), q.size(1), self.num_heads_, self.head_dim_)
         k = k.reshape(k.size(0), k.size(1), self.num_key_value_heads_, self.head_dim_)
         v = v.reshape(v.size(0), v.size(1), self.num_key_value_heads_, self.head_dim_).transpose(1, 2)
         cos, sin = position_embeddings
-        q, k = self._ComputeQK(q, k, cos, sin, past_key_values)
+        q, k = self._ComputeQK(q, k, cos, sin, past_key_values, mask)
         k, v = past_key_values.update(k, v, self.layer_idx_)
         k = self.repeat_kv(k)
         v = self.repeat_kv(v)
