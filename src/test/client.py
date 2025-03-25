@@ -9,7 +9,7 @@ payload = {
     "top_p": 0.8,
     "top_k": 20,
     "temperature": 10,
-    "do_sample": True
+    "do_sample": False
 }
 
 # 普通请求函数（保持原有）
@@ -39,8 +39,7 @@ def stream_request():
                     buffer += decoded_chunk
                     ddict = json.loads(decoded_chunk)
                     print(ddict['generated_text'], end="")  # 不换行
-
-                                
+                          
     except requests.exceptions.RequestException as e:
         print(f"请求异常: {str(e)}")
 

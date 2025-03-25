@@ -3,7 +3,11 @@ from ..layer_weights.load_weights import Qwen2LayerWeight
 from ..cache import Cache, NormalCache
 from typing import Optional
 from ..kernel.develop_rope.rope import rotary_emb_fwd
-from ..kernel.develop_flash_attn.flash_attn_v2 import flash_attentionv2
+from ..kernel.develop_flash_attn.flash_decode_v2 import decode_flash_attention
+from ..kernel.develop_flash_attn.flash_attn_v2 import triton_attention
+
+import triton
+import triton.language as tl
 
 class Qwen2TransformerLayer:
     
@@ -16,6 +20,10 @@ class Qwen2TransformerLayer:
         self.rep_times_ = self.num_heads_ // self.num_key_value_heads_
         self.layer_idx_ = layer_idx
         self.eps = 1e-6
+        self.sm_scale = 1.0 / (self.head_dim_ ** 0.5)
+        self.flag = False
+        self.cnt = 0
+        
         
     def Forward(self, hidden_states: torch.Tensor, position_embeddings: torch.Tensor, mask, is_decode, past_key_values: Optional[Cache]):
         residual = hidden_states
@@ -60,7 +68,6 @@ class Qwen2TransformerLayer:
 
         q = q.reshape(batch * seq_len, -1, dim)
         k = k.reshape(batch * seq_len, -1, dim) # GQA的头数有时不一致
-        
         rotary_emb_fwd(q, k, cos_seqlen, sin_seqlen)
         
         q_after = q.reshape(batch, seq_len, -1, dim).transpose(1, 2)
@@ -104,6 +111,8 @@ class Qwen2TransformerLayer:
 
     def _ComputeAttnScore(self, q, k, v, position_embeddings, mask, is_decode, past_key_values: Optional[Cache]):
         hidden_states_shape = q.shape
+        padding_mask = mask == 1
+        padding_mask = padding_mask.cuda()
         q = q.reshape(q.size(0), q.size(1), self.num_heads_, self.head_dim_)
         k = k.reshape(k.size(0), k.size(1), self.num_key_value_heads_, self.head_dim_)
         v = v.reshape(v.size(0), v.size(1), self.num_key_value_heads_, self.head_dim_).transpose(1, 2)
@@ -112,18 +121,21 @@ class Qwen2TransformerLayer:
         k, v = past_key_values.update(k, v, self.layer_idx_)
         k = self.repeat_kv(k)
         v = self.repeat_kv(v)
-        qk = q @ k.transpose(-2, -1)
+        q = q.to(torch.float16)
+        k = k.to(torch.float16)
+        v = v.to(torch.float16)
         
-        # 需要计算q和k的旋转位置编码，将位置信息编码进来，这里没写
-        qk = qk / q.size(-1) ** 0.5
         if not is_decode:
-            attn_mask = self.CreateCausalPaddingMask(mask)
-            qk = qk + attn_mask
+            if not q.is_contiguous():
+                q = q.contiguous()
+            attn_score = triton_attention(q, k, v, padding_mask, sm_scale=self.sm_scale)
         else:
-            attn_mask = self.CreateDecodePaddingMask(mask)
-            qk = qk + attn_mask[:, None, None, :]
-        qk = torch.softmax(qk, dim=-1)
-        attn_score = qk @ v
+            if not q.is_contiguous():
+                q = q.contiguous()
+            
+            attn_score = decode_flash_attention(q, k, v, padding_mask, sm_scale=self.sm_scale)
+
+        attn_score = attn_score.to(torch.float32)
         attn_score = attn_score.transpose(1, 2).reshape(*hidden_states_shape)
         attn_score = attn_score @ self.layer_weight.o_proj.proj.transpose(-2, -1)
         if self.layer_weight.o_proj.bias is not None:
