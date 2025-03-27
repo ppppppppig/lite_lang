@@ -5,9 +5,8 @@ from typing import Optional
 from ..kernel.develop_rope.rope import rotary_emb_fwd
 from ..kernel.develop_flash_attn.flash_decode_v2 import decode_flash_attention
 from ..kernel.develop_flash_attn.flash_attn_v2 import triton_attention
-
-import triton
-import triton.language as tl
+from ..kernel.develop_rmsnorm.rms_norm import rmsnorm
+from ..kernel.develop_silu_and_mul.silu_and_mul import silu_and_mul_fwd
 
 class Qwen2TransformerLayer:
     
@@ -36,22 +35,34 @@ class Qwen2TransformerLayer:
         hidden_states = self._Ffn(hidden_states)
         hidden_states = residual + hidden_states
         return hidden_states
-        
+    
+    # 要求输入[batch_size, seq_len, hidden_size]
     def _Ffn(self, hidden_states):
-        hidden_states = torch.nn.functional.silu(hidden_states @ self.layer_weight.gate_proj.transpose(-2, -1)) *  (hidden_states @ self.layer_weight.up_proj.transpose(-2, -1))
-        hidden_states = hidden_states @ self.layer_weight.down_proj.transpose(-2, -1)
+        hidden_states = hidden_states.reshape(hidden_states.size(0) * hidden_states.size(1), hidden_states.size(2))
+        gate_and_up_proj = torch.cat([self.layer_weight.gate_proj, self.layer_weight.up_proj], dim=0)
+        hidden_states = hidden_states @ gate_and_up_proj.transpose(-2, -1)
+        M, N = hidden_states.shape
+        output = torch.empty((M, N // 2), dtype=torch.float32).cuda()
+        silu_and_mul_fwd(hidden_states, output)
+        hidden_states = output @ self.layer_weight.down_proj.transpose(-2, -1)
         return hidden_states
 
     # 要求输入[batch_size, seq_len, hidden_size]
     def _InputLayernorm(self, input):
-        denominator = torch.sqrt(torch.sum(input * input, dim=-1) / input.size(-1) + self.eps)
-        res = input / denominator[..., None] * self.layer_weight.layernorm.proj
-        return res
+        origin_hidden_stats = input.shape
+        # import pdb
+        # pdb.set_trace()
+        input = input.reshape(origin_hidden_stats[0] * origin_hidden_stats[1], -1)
+        output = rmsnorm(input, self.layer_weight.layernorm.proj, self.eps)
+        output = output.reshape(*origin_hidden_stats)
+        return output
     
     def _FfnNorm(self, input):
-        denominator = torch.sqrt(torch.sum(input * input, dim=-1) / input.size(-1) + self.eps)
-        res = input / denominator[..., None] * self.layer_weight.post_attn_layernorm.proj
-        return res
+        origin_hidden_stats = input.shape
+        input = input.reshape(origin_hidden_stats[0] * origin_hidden_stats[1], -1)
+        output = rmsnorm(input, self.layer_weight.post_attn_layernorm.proj, self.eps)
+        output = output.reshape(*origin_hidden_stats)
+        return output
     
     def _QkvCompute(self, input):
         q = input @ self.layer_weight.q_proj.proj.transpose(-2, -1).to(torch.float32) + self.layer_weight.q_proj.bias.to(torch.float32)

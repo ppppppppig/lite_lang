@@ -99,4 +99,5 @@ def test_silu_and_mul(M, N, dtype, device="cuda"):
     assert torch.allclose(out, y_ref, atol=1e-3, rtol=0)
     return  
 
-test_silu_and_mul(2048, 2048, torch.float16)
+if __name__ == '__main__':
+    test_silu_and_mul(2048, 2048, torch.float16)

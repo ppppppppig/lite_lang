@@ -122,7 +122,6 @@ class ReqManager:
         
     def UpdateReq(self, model_outputs):
         output_tokens = model_outputs.output_tokens[:, -1]
-        print(f"output_tokens:{output_tokens}")
         output_prompts = self.tokenizer_.decode(output_tokens)
         for req_idx in range(len(output_prompts)):
             model_outputs.reqs[req_idx].Add(output_prompts[req_idx], output_tokens[req_idx] == self.tokenizer_.eos_token_id)

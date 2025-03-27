@@ -67,7 +67,6 @@ def rmsnorm(x, gamma, variance_epsilon):
         num_stages=3, num_warps=4,
         BLOCK=block
     )
-    print(f"out: {out}")
     return out
 
 
@@ -82,5 +81,6 @@ def test_rmsnorm(M, N, variance_epsilon=1e-5):
     print(f"max diff: {torch.max(res1 - res2)}")
     
     assert torch.allclose(res1, res2, atol=1e-3), "diff large"
-    
-test_rmsnorm(100, 2048)
+
+if __name__ == '__main__':
+    test_rmsnorm(100, 2048)

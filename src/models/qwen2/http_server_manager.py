@@ -23,7 +23,6 @@ class HttpServerManager:
     
     # 流式生成接口,这里只有流式生成接口，后续再合并
     def generate(self, prompt, top_p, top_k, temperature, do_sample):
-        print(f"prompt: {prompt}")
         req = self.req_manager_.Add(prompt, top_p, top_k, temperature, do_sample)
         
         while True:

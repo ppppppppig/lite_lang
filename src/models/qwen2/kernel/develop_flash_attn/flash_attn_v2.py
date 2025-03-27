@@ -188,6 +188,5 @@ if __name__ == "__main__":
         print(f"output: {output[:, :, :, :]}")
         print(f"max: {torch.max(output)}")
         print(f"standard_out: {standard_out[:, :, :, :]}")
-        print(f"max diff: {torch.max(torch.abs(output[:, :, 1:, :] - standard_out[:, :, 1:, :]))}")
         assert torch.allclose(output[:, :, 1:, :], standard_out[:, :, 1:, :], atol=1e-3), "Error: output and standard_out are not close"
 
