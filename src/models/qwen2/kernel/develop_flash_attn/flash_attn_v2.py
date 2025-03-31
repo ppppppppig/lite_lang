@@ -3,7 +3,6 @@ import triton
 import triton.language as tl
 import torch
 
-import pdb
 @triton.jit
 def _fwd_kernel(
     Q, K, V,
@@ -57,6 +56,9 @@ def _fwd_kernel(
         k = tl.load(k_ptrs, mask=(block_n + offs_n[None, :]) < seq_len, other=0.0)
 
         # 计算QK
+        tl.static_print("fsdfsdf")
+        tl.static_print(q)
+        tl.static_print(k)
         qk = tl.dot(q, k) * sm_scale
         
         # 应用因果掩码
@@ -112,7 +114,7 @@ def triton_attention(Q, K, V, padding_mask, sm_scale=None):
     
     # 配置执行网格
     BLOCK_M = 64 if d_model <= 64 else 32
-    BLOCK_N = 64
+    BLOCK_N = 32
     grid = ( triton.cdiv(seq_len, BLOCK_M), batch , n_heads)
     
     # 转换padding_mask格式
@@ -138,6 +140,7 @@ def triton_attention(Q, K, V, padding_mask, sm_scale=None):
         num_stages=2
     )
     return Out
+
 
 # 标准的 Attention
 def standard_softmax_attention(Q, K, V, padding_mask, sm_scale):
@@ -165,21 +168,13 @@ if __name__ == "__main__":
     Q = torch.empty((B, H, N_CTX, D_MODEL), dtype=dtype, device="cuda").normal_(mean=0.1, std=0.2).requires_grad_()
     K = torch.empty((B, H, N_CTX, D_MODEL), dtype=dtype, device="cuda").normal_(mean=0.4, std=0.2).requires_grad_()
     V = torch.empty((B, H, N_CTX, D_MODEL), dtype=dtype, device="cuda").normal_(mean=0.3, std=0.2).requires_grad_()
-    # torch.cuda.set_device(4)
-    # Q = torch.load("q.pt").cuda()
-    # K = torch.load("k.pt").cuda()
-    # V = torch.load("v.pt").cuda()
-    # print(f"Q: {Q}")
-    # print(f"K: {K}")
-    # print(f"V: {V}")
+
     padding_mask = torch.ones((B, N_CTX), dtype=torch.bool, device="cuda")
     sm_scale = 0.01
-    # output = triton_attention(Q, K, V, padding_mask=padding_mask, sm_scale=sm_scale)
-    # print(f"max: {torch.max(output)}")
+
     
     padding_mask[:, 0:1] = False
-    # print(f"padding_mask: {padding_mask}")
-    # padding_mask[0, 1] = False
+    print(f"fk you")
     times = 1
     while times > 0:
         times -= 1
