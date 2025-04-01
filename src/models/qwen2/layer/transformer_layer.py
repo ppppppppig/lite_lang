@@ -3,8 +3,8 @@ from ..layer_weights.load_weights import Qwen2LayerWeight
 from ..cache import Cache, NormalCache
 from typing import Optional
 from ..kernel.develop_rope.rope import rotary_emb_fwd
-from ..kernel.develop_flash_attn.flash_decode_v2 import decode_flash_attention
-from ..kernel.develop_flash_attn.flash_attn_v2 import triton_attention
+from ..kernel.develop_flash_attn.attn_decode_v2 import decode_flash_attention, gqa_decode_attention_fwd, gqa_reference_impl
+from ..kernel.develop_flash_attn.flash_attn_v2 import triton_attention, gqa_context_attention, standard_attention_no_pad
 from ..kernel.develop_rmsnorm.rms_norm import rmsnorm
 from ..kernel.develop_silu_and_mul.silu_and_mul import silu_and_mul_fwd
 
@@ -16,19 +16,17 @@ class Qwen2TransformerLayer:
         self.num_heads_ = num_heads
         self.head_dim_ = head_dim
         self.num_key_value_heads_ = num_key_value_heads
-        self.rep_times_ = self.num_heads_ // self.num_key_value_heads_
+        assert self.num_heads_ % self.num_key_value_heads_ == 0, f"num_heads: {self.num_heads_}, num_key_value_heads: {self.num_key_value_heads_}, can not be divided"
+        self.kv_group_num_ = self.num_heads_ // self.num_key_value_heads_
         self.layer_idx_ = layer_idx
         self.eps = 1e-6
         self.sm_scale = 1.0 / (self.head_dim_ ** 0.5)
-        self.flag = False
-        self.cnt = 0
         
-        
-    def Forward(self, hidden_states: torch.Tensor, position_embeddings: torch.Tensor, mask, is_decode, past_key_values: Optional[Cache]):
+    def Forward(self, hidden_states: torch.Tensor, position_embeddings: torch.Tensor, model_inputs):
         residual = hidden_states
         hidden_states = self._InputLayernorm(hidden_states)
         q, k, v = self._QkvCompute(hidden_states)
-        hidden_states = self._ComputeAttnScore(q, k, v, position_embeddings, mask, is_decode, past_key_values)
+        hidden_states = self._ComputeAttnScore(q, k, v, position_embeddings, model_inputs)
         hidden_states = residual + hidden_states
         residual = hidden_states
         hidden_states = self._FfnNorm(hidden_states)
@@ -36,9 +34,7 @@ class Qwen2TransformerLayer:
         hidden_states = residual + hidden_states
         return hidden_states
     
-    # 要求输入[batch_size, seq_len, hidden_size]
     def _Ffn(self, hidden_states):
-        hidden_states = hidden_states.reshape(hidden_states.size(0) * hidden_states.size(1), hidden_states.size(2))
         gate_and_up_proj = torch.cat([self.layer_weight.gate_proj, self.layer_weight.up_proj], dim=0)
         hidden_states = hidden_states @ gate_and_up_proj.transpose(-2, -1)
         M, N = hidden_states.shape
@@ -47,21 +43,13 @@ class Qwen2TransformerLayer:
         hidden_states = output @ self.layer_weight.down_proj.transpose(-2, -1)
         return hidden_states
 
-    # 要求输入[batch_size, seq_len, hidden_size]
+    # 要求输入[batch_size * seq_len, hidden_size]
     def _InputLayernorm(self, input):
-        origin_hidden_stats = input.shape
-        # import pdb
-        # pdb.set_trace()
-        input = input.reshape(origin_hidden_stats[0] * origin_hidden_stats[1], -1)
         output = rmsnorm(input, self.layer_weight.layernorm.proj, self.eps)
-        output = output.reshape(*origin_hidden_stats)
         return output
     
     def _FfnNorm(self, input):
-        origin_hidden_stats = input.shape
-        input = input.reshape(origin_hidden_stats[0] * origin_hidden_stats[1], -1)
         output = rmsnorm(input, self.layer_weight.post_attn_layernorm.proj, self.eps)
-        output = output.reshape(*origin_hidden_stats)
         return output
     
     def _QkvCompute(self, input):
@@ -70,32 +58,14 @@ class Qwen2TransformerLayer:
         v = input @ self.layer_weight.v_proj.proj.transpose(-2, -1).to(torch.float32) + self.layer_weight.v_proj.bias.to(torch.float32)
         return q, k, v
     
-    def _ComputeQK(self, q, k, cos, sin, past_key_values, mask):
-        batch, seq_len, _, dim = q.shape
+    def _ComputeQK(self, q, k, cos, sin, model_inputs):
 
-        last_input_length = past_key_values.GetInputLength(self.layer_idx_)
-        
-        mask_slice = mask[:, last_input_length:]
-        mask_slice = mask_slice % mask.size(1)
-        # 将负索引转换为非负索引
-        mask_one_dim = torch.flatten(mask_slice)
-        cos_seqlen = torch.index_select(cos, 0,  mask_one_dim)
-        sin_seqlen = torch.index_select(sin, 0, mask_one_dim)
-
-        q = q.reshape(batch * seq_len, -1, dim)
-        k = k.reshape(batch * seq_len, -1, dim) # GQA的头数有时不一致
+        cos_seqlen = torch.index_select(cos, 0, model_inputs.position_ids)
+        sin_seqlen = torch.index_select(sin, 0, model_inputs.position_ids)
 
         rotary_emb_fwd(q, k, cos_seqlen, sin_seqlen)
 
-        q_after = q.reshape(batch, seq_len, -1, dim).transpose(1, 2)
-        k_after = k.reshape(batch, seq_len, -1, dim).transpose(1, 2)
-        
-        return q_after, k_after
-    
-    def repeat_kv(self, te):
-        b, h, s, d = te.size(0), te.size(1), te.size(2), te.size(3)
-        te =  te[:, :, None, :, :].expand(b, h, self.rep_times_, s, d)
-        return te.reshape(b, h * self.rep_times_, s, d)
+        return q, k
         
     def CreateCausalPaddingMask(self, mask, fill_value=torch.finfo(torch.float32).min):
         batch_size, seq_len = mask.shape
@@ -126,34 +96,29 @@ class Qwen2TransformerLayer:
         ).to(torch.float32)
         return attn_mask
 
-    def _ComputeAttnScore(self, q, k, v, position_embeddings, mask, is_decode, past_key_values: Optional[Cache]):
+    def _ComputeAttnScore(self, q, k, v, position_embeddings, model_inputs):
         hidden_states_shape = q.shape
-        padding_mask = mask >= 0
-        padding_mask = padding_mask.cuda()
-        q = q.reshape(q.size(0), q.size(1), self.num_heads_, self.head_dim_)
-        k = k.reshape(k.size(0), k.size(1), self.num_key_value_heads_, self.head_dim_)
-        v = v.reshape(v.size(0), v.size(1), self.num_key_value_heads_, self.head_dim_).transpose(1, 2)
+        
+        q = q.reshape(q.size(0), self.num_heads_, self.head_dim_)
+        k = k.reshape(k.size(0), self.num_key_value_heads_, self.head_dim_)
+        v = v.reshape(v.size(0), self.num_key_value_heads_, self.head_dim_)
         cos, sin = position_embeddings
-        q, k = self._ComputeQK(q, k, cos, sin, past_key_values, mask)
-        k, v = past_key_values.update(k, v, self.layer_idx_)
-        k = self.repeat_kv(k)
-        v = self.repeat_kv(v)
+        q, k = self._ComputeQK(q, k, cos, sin, model_inputs)
+        
+        k, v = model_inputs.past_key_values.update(k, v, self.layer_idx_, model_inputs)
         q = q.to(torch.float16)
         k = k.to(torch.float16)
         v = v.to(torch.float16)
-        
-        if not is_decode:
+        if not model_inputs.is_prefill:
             if not q.is_contiguous():
                 q = q.contiguous()
-            attn_score = triton_attention(q, k, v, padding_mask, sm_scale=self.sm_scale)
+            attn_score = gqa_reference_impl(q, k, v, model_inputs.kv_start_idx, model_inputs.b_seq_len, sm_scale=self.sm_scale, kv_group_num=self.kv_group_num_)
         else:
             if not q.is_contiguous():
                 q = q.contiguous()
-            
-            attn_score = decode_flash_attention(q, k, v, padding_mask, sm_scale=self.sm_scale)
-
+            attn_score = standard_attention_no_pad(q, k, v, model_inputs.b_start_idx, model_inputs.b_seq_len, sm_scale=self.sm_scale, kv_group_num=self.kv_group_num_)
         attn_score = attn_score.to(torch.float32)
-        attn_score = attn_score.transpose(1, 2).reshape(*hidden_states_shape)
+        attn_score = attn_score.reshape(*hidden_states_shape)
         attn_score = attn_score @ self.layer_weight.o_proj.proj.transpose(-2, -1)
         if self.layer_weight.o_proj.bias is not None:
             attn_score = attn_score + self.layer_weight.o_proj.bias

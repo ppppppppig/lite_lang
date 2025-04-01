@@ -9,6 +9,10 @@ class Tokenizer:
         input_tokens = self.tokenizer(prompts, return_tensors="pt", padding=True, truncation=True)
         return input_tokens["input_ids"], input_tokens["attention_mask"]
 
+    def encode_single(self, prompt):
+        input_tokens = self.tokenizer([prompt,], return_tensors="pt", padding=True, truncation=True)
+        return input_tokens["input_ids"]
+
     def decode(self, generate_ids):
         output = self.tokenizer.batch_decode(generate_ids, skip_special_tokens=True, clean_up_tokenization_spaces=False)
         return output

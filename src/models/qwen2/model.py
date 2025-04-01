@@ -38,10 +38,10 @@ class Qwen2Model:
         if model_inputs.is_prefill:
             input_tokens = model_inputs.input_tokens
         else:
-            input_tokens = model_inputs.output_tokens[:, -1][:, None]
+            input_tokens = model_inputs.output_tokens
         hidden_states = self.pre_layer.Forward(input_tokens)
         for layer in self.layers:
-            hidden_states = layer.Forward(hidden_states, self.position_embeddings, model_inputs.padding_mask, not model_inputs.is_prefill, model_inputs.past_key_values)
+            hidden_states = layer.Forward(hidden_states, self.position_embeddings, model_inputs)
         output_tokens = self.post_layer.Forward(hidden_states, model_inputs)
         return output_tokens
     
