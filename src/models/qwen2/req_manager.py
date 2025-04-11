@@ -38,11 +38,15 @@ class Req:
     input_length: int
     output_length: int = 0
     is_end: bool = False
-    
+    rid: int = None   
+    # 一共有两个队列，分别是运行队列和就绪队列，分配了rid的就是运行队列，否则就是就绪队列
+    # 实际上应该有三个队列，此版本暂时不考虑kv cache不够的情况
     def Add(self, text: str, is_eos_token):
         self.output_length += 1
         if is_eos_token or (self.output_length + self.input_length >= self.max_total_length and self.output_length >= self.max_output_length):
             self.is_end = True
+        print(f"self.max_total_length: {self.max_total_length}, self.output_length: {self.output_length}, self.input_length: {self.input_length}")
+        print(f"self.length: {self.length}, is_end: {self.is_end}")
         self.output_prompt_que.put((text, self.is_end))
     
     @property
@@ -76,13 +80,14 @@ class ModelInput:
         do_sample = torch.tensor([req.do_sample for req in self.reqs]).cuda()
         return temperatures, top_p, top_k, do_sample
     
+    # 为了屏蔽bug，修改这里，只要有请求停止，batch停止
     def view_is_end(self):
         for req in self.reqs:
-            if not req.is_end:
-                self.is_batch_end = False
+            if req.is_end:
+                self.is_batch_end = True
                 return
             
-        self.is_batch_end = True
+        self.is_batch_end = False
     
     # 更新请求信息，目前只更新了input_length
     def update_reqs_message(self, b_seq_len):

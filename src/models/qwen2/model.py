@@ -1,6 +1,6 @@
 import torch
 from .layer import Qwen2TransformerLayer, Qwen2PreLayer, Qwen2PostLayer
-from .cache import Cache, NormalCache
+from .cache import Cache, PageCache
 from typing import Optional
 
 class Qwen2Config:
@@ -31,17 +31,15 @@ class Qwen2Model:
         self.post_layer = Qwen2PostLayer(config.tie_word_embeddings)
         self.position_embeddings = self.pre_layer.position_embeddings
 
-    def forward(self, model_inputs):
-        if model_inputs.past_key_values is None:
-            model_inputs.past_key_values = NormalCache(self.layer_nums_)
-        
+    def forward(self, model_inputs, kv_cache):
+
         if model_inputs.is_prefill:
             input_tokens = model_inputs.input_tokens
         else:
             input_tokens = model_inputs.output_tokens
         hidden_states = self.pre_layer.Forward(input_tokens)
         for layer in self.layers:
-            hidden_states = layer.Forward(hidden_states, self.position_embeddings, model_inputs)
+            hidden_states = layer.Forward(hidden_states, self.position_embeddings, model_inputs, kv_cache)
         output_tokens = self.post_layer.Forward(hidden_states, model_inputs)
         return output_tokens
     
@@ -58,3 +56,30 @@ class Qwen2Model:
         for layer in self.layers:
             layer.layer_weight.init(data_dict)
         self.post_layer.post_layer_weight.init(data_dict)
+
+# 目前只支持qwen2，暂时只实现qwen2模型的Runner
+class Qwen2ModelRunner:
+    def __init__(self, layer_nums, max_req_length, config: Qwen2Config, **runner_kwargs):
+        self.model_ins_ = Qwen2Model(layer_nums, max_req_length, config)
+        model_path = runner_kwargs['model_path']
+        self.model_ins_.load_weight(model_path)
+        self.kv_cache_ = PageCache(max_req_length, runner_kwargs['max_length'], runner_kwargs['mem_usage'], layer_nums, config.head_dim, config.num_key_value_heads, torch_dtype=torch.float16)
+
+    def forward(self, model_inputs):
+        
+        if model_inputs.is_prefill:
+            for req in model_inputs.reqs:
+                req.rid = self._add_new_req(req.input_length)
+                if req.rid is None:
+                    return False
+        return self.model_ins_.forward(model_inputs, self.kv_cache_)
+        
+    def _add_new_req(self, length):
+        if self.kv_cache_.can_allocated(length):
+            return self.kv_cache_.alloc_req()
+        else:
+            return None
+        
+    def free_all(self, reqs):
+        self.kv_cache_.dealloc_reqs(reqs)
+    

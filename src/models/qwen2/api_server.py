@@ -15,8 +15,8 @@ class GObjs:
     default_temperature = 1.0
     default_top_p = 1.0
     default_top_k = 1
-    default_do_sample = False
-    
+    default_do_sample = Falsesrc/models/qwen2/api_server.py
+
 app = FastAPI()
 g_objs = GObjs(app=app)
 

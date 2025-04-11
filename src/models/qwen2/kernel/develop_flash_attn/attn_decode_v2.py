@@ -323,8 +323,6 @@ def gqa_reference_impl(Q, K, V, position_ids, req_lens, sm_scale, kv_group_num):
             # 加权求和
             O[req_idx, q_start:q_end, :] = attn_weights @ v  # [kv_group_num, head_dim]
     return O
-            
-        
 
 def test_triton_attention():
     # 创建示例数据

@@ -39,4 +39,5 @@ bash test/start_multi_req.sh
 | buglist    | 场景 | 状态   |
 | ----------- | ------ | ------ |
 | 1  | 使用flast attn算子时，偶发输出不对  | 已解决（flash attn算子存在越界写错误） |
-| 2  | 当组batch推理长度不同的prompt时，最长的prompt必须在batch最前，否则会崩溃  | 应该是flash_attn算子导致的问题，暂时不定位，后续开发kv_cache和no_padding需要更改该算子 |  
+| 2  | 当组batch推理长度不同的prompt时，最长的prompt必须在batch最前，否则会崩溃  | 更新算子后已解决 |  
+| 3  | attn计算时q，k,v必须和  | 应该是flash_attn算子导致的问题，暂时不定位，后续开发kv_cache和no_padding需要更改该算子 |  

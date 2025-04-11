@@ -4,7 +4,8 @@ from ..cache import Cache, NormalCache
 from typing import Optional
 from ..kernel.develop_rope.rope import rotary_emb_fwd
 from ..kernel.develop_flash_attn.attn_decode_v2 import decode_flash_attention, gqa_decode_attention_fwd, gqa_reference_impl
-from ..kernel.develop_flash_attn.flash_attn_v2 import triton_attention, gqa_context_attention, standard_attention_no_pad
+from ..kernel.develop_flash_attn.flash_decoding import token_decode_attention_flash_decoding
+from ..kernel.develop_flash_attn.flash_attn_v2 import triton_attention, gqa_context_attention, standard_attention_no_pad, context_attention_fwd_with_no_pad_and_kv_cache
 from ..kernel.develop_rmsnorm.rms_norm import rmsnorm
 from ..kernel.develop_silu_and_mul.silu_and_mul import silu_and_mul_fwd
 
@@ -22,11 +23,11 @@ class Qwen2TransformerLayer:
         self.eps = 1e-6
         self.sm_scale = 1.0 / (self.head_dim_ ** 0.5)
         
-    def Forward(self, hidden_states: torch.Tensor, position_embeddings: torch.Tensor, model_inputs):
+    def Forward(self, hidden_states: torch.Tensor, position_embeddings: torch.Tensor, model_inputs, kv_cache):
         residual = hidden_states
         hidden_states = self._InputLayernorm(hidden_states)
         q, k, v = self._QkvCompute(hidden_states)
-        hidden_states = self._ComputeAttnScore(q, k, v, position_embeddings, model_inputs)
+        hidden_states = self._ComputeAttnScore(q, k, v, position_embeddings, model_inputs, kv_cache)
         hidden_states = residual + hidden_states
         residual = hidden_states
         hidden_states = self._FfnNorm(hidden_states)
@@ -96,7 +97,7 @@ class Qwen2TransformerLayer:
         ).to(torch.float32)
         return attn_mask
 
-    def _ComputeAttnScore(self, q, k, v, position_embeddings, model_inputs):
+    def _ComputeAttnScore(self, q, k, v, position_embeddings, model_inputs, kv_cache):
         hidden_states_shape = q.shape
         
         q = q.reshape(q.size(0), self.num_heads_, self.head_dim_)
@@ -105,18 +106,37 @@ class Qwen2TransformerLayer:
         cos, sin = position_embeddings
         q, k = self._ComputeQK(q, k, cos, sin, model_inputs)
         
-        k, v = model_inputs.past_key_values.update(k, v, self.layer_idx_, model_inputs)
         q = q.to(torch.float16)
         k = k.to(torch.float16)
         v = v.to(torch.float16)
+        
+        if model_inputs.is_prefill:
+            kv_cache.write_prefill_kv_cache(model_inputs.reqs, model_inputs.b_start_idx, self.layer_idx_, k, v)
+            token_idxs = kv_cache.get_token_index(model_inputs.reqs)
+            after_k, after_v = kv_cache.kv_cache_[self.layer_idx_, token_idxs, :self.num_key_value_heads_], kv_cache.kv_cache_[self.layer_idx_, token_idxs, self.num_key_value_heads_:]
+            if k.max() == 102.6875:
+                import pdb; pdb.set_trace()
+        else:
+            token_idxs = kv_cache.write_decode_kv_cache(model_inputs.reqs, model_inputs.b_start_idx, self.layer_idx_, k, v)
+            k, v = kv_cache.kv_cache_[self.layer_idx_, token_idxs, :self.num_key_value_heads_], kv_cache.kv_cache_[self.layer_idx_, token_idxs, self.num_key_value_heads_:]
         if not model_inputs.is_prefill:
             if not q.is_contiguous():
                 q = q.contiguous()
-            attn_score = gqa_reference_impl(q, k, v, model_inputs.kv_start_idx, model_inputs.b_seq_len, sm_scale=self.sm_scale, kv_group_num=self.kv_group_num_)
+            b_req_idx = [req.rid for req in model_inputs.reqs]
+            b_req_idx = torch.tensor(b_req_idx, dtype=torch.int32).cuda()
+            attn_score = torch.zeros_like(q)
+            
+            token_decode_attention_flash_decoding(
+                q, kv_cache.req_to_tokens_, b_req_idx, model_inputs.b_seq_len, model_inputs.b_seq_len.max().item(), q.size(-2), q.size(-1), kv_cache.kv_cache_[self.layer_idx_, :, :self.num_key_value_heads_], kv_cache.kv_cache_[self.layer_idx_, :, self.num_key_value_heads_:], out=attn_score
+            )
         else:
             if not q.is_contiguous():
                 q = q.contiguous()
-            attn_score = standard_attention_no_pad(q, k, v, model_inputs.b_start_idx, model_inputs.b_seq_len, sm_scale=self.sm_scale, kv_group_num=self.kv_group_num_)
+            b_req_idx = [req.rid for req in model_inputs.reqs]
+            b_req_idx = torch.tensor(b_req_idx, dtype=torch.int32).cuda()
+            attn_score = torch.zeros_like(q)
+            context_attention_fwd_with_no_pad_and_kv_cache(q, kv_cache.kv_cache_[self.layer_idx_, :, :self.num_key_value_heads_], kv_cache.kv_cache_[self.layer_idx_, :, self.num_key_value_heads_:], attn_score, b_req_idx, model_inputs.b_start_idx, model_inputs.b_seq_len, max_input_len=model_inputs.b_seq_len.max().item(), req_to_token_indexs=kv_cache.req_to_tokens_)
+
         attn_score = attn_score.to(torch.float32)
         attn_score = attn_score.reshape(*hidden_states_shape)
         attn_score = attn_score @ self.layer_weight.o_proj.proj.transpose(-2, -1)
