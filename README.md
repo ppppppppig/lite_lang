@@ -16,7 +16,7 @@
 | ----------- | ------ | ------ |
 | v0.1  | 1.支持流式接口<br>2.支持qwen2-1.5B   | 已发布 |  
 | v0.2  | 开发rmsnorm/ffn/flash_attn/rope等算子，大幅提高推理性能  | 已发布 |
-| v0.3  | 支持NoPadding输入与kv cache，以及flash decoding | 未开发 |
+| v0.3  | 支持NoPadding输入与kv cache，以及flash decoding | 已发布 |
 | v0.4  | 支持多TP，支持qwq-32B模型部署 | 未开发 |
 | v0.5  | 支持连续批处理 | 未开发 |
 
