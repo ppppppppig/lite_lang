@@ -16,7 +16,7 @@ class HttpServerManager:
         self.req_manager_ = ReqManager(max_batch_size=max_batch_size, tokenizer=Tokenizer(model_path),
                                        max_total_length=max_total_length, max_output_length=max_output_length)
         config = Qwen2Config(os.path.join(model_path, 'config.json'))
-        self.model = Qwen2ModelRunner(config.layer_nums, max_total_length, config, model_path=model_path, max_length=max_total_length, mem_usage=0.5)
+        self.model = Qwen2ModelRunner(config.layer_nums, max_total_length, config, model_path=model_path, max_length=max_total_length, mem_usage=mem_usage)
         self._thread = threading.Thread(target=self.handle_loop)
         self._thread.start()
     
@@ -40,7 +40,14 @@ class HttpServerManager:
             model_inputs = self.req_manager_.get_req_batch()
             if model_inputs is None:
                 continue
+            start_time = time.perf_counter()
             while not model_inputs.is_batch_end:
                 output_token_ids = self.model.forward(model_inputs)
                 self.req_manager_.update_req(model_inputs, output_token_ids)
+            all_tokens_length = 0
+            for req in model_inputs.reqs:
+                all_tokens_length += req.length
+            end_time = time.perf_counter()
+            tokens_per_second = all_tokens_length / (end_time - start_time)
+            print(f"生成速度: {tokens_per_second:.2f} tokens/秒")
             self.model.free_all(model_inputs.reqs)

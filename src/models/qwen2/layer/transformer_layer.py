@@ -114,8 +114,6 @@ class Qwen2TransformerLayer:
             kv_cache.write_prefill_kv_cache(model_inputs.reqs, model_inputs.b_start_idx, self.layer_idx_, k, v)
             token_idxs = kv_cache.get_token_index(model_inputs.reqs)
             after_k, after_v = kv_cache.kv_cache_[self.layer_idx_, token_idxs, :self.num_key_value_heads_], kv_cache.kv_cache_[self.layer_idx_, token_idxs, self.num_key_value_heads_:]
-            if k.max() == 102.6875:
-                import pdb; pdb.set_trace()
         else:
             token_idxs = kv_cache.write_decode_kv_cache(model_inputs.reqs, model_inputs.b_start_idx, self.layer_idx_, k, v)
             k, v = kv_cache.kv_cache_[self.layer_idx_, token_idxs, :self.num_key_value_heads_], kv_cache.kv_cache_[self.layer_idx_, token_idxs, self.num_key_value_heads_:]

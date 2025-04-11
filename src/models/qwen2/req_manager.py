@@ -45,8 +45,6 @@ class Req:
         self.output_length += 1
         if is_eos_token or (self.output_length + self.input_length >= self.max_total_length and self.output_length >= self.max_output_length):
             self.is_end = True
-        print(f"self.max_total_length: {self.max_total_length}, self.output_length: {self.output_length}, self.input_length: {self.input_length}")
-        print(f"self.length: {self.length}, is_end: {self.is_end}")
         self.output_prompt_que.put((text, self.is_end))
     
     @property
@@ -80,7 +78,7 @@ class ModelInput:
         do_sample = torch.tensor([req.do_sample for req in self.reqs]).cuda()
         return temperatures, top_p, top_k, do_sample
     
-    # 为了屏蔽bug，修改这里，只要有请求停止，batch停止
+    # 为了屏蔽bug，修改这里，只要有请求停止，batch停止, 否则由于kv cache长度限制，可能导致程序崩溃，后面开发连续批处理时解决这个问题
     def view_is_end(self):
         for req in self.reqs:
             if req.is_end:
