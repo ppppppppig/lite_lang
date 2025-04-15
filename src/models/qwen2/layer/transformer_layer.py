@@ -8,30 +8,35 @@ from ..kernel.develop_flash_attn.flash_decoding import token_decode_attention_fl
 from ..kernel.develop_flash_attn.flash_attn_v2 import triton_attention, gqa_context_attention, standard_attention_no_pad, context_attention_fwd_with_no_pad_and_kv_cache
 from ..kernel.develop_rmsnorm.rms_norm import rmsnorm
 from ..kernel.develop_silu_and_mul.silu_and_mul import silu_and_mul_fwd
+import torch.distributed as dist
 
 class Qwen2TransformerLayer:
     
-    def __init__(self, layer_idx, num_heads, head_dim, num_key_value_heads):
-        self.layer_weight = Qwen2LayerWeight(layer_idx)
+    def __init__(self, layer_idx, num_heads, head_dim, num_key_value_heads, tp_rank, world_size):
+        self.layer_weight = Qwen2LayerWeight(layer_idx, tp_rank, world_size)
         self.layer_idx_ = layer_idx
-        self.num_heads_ = num_heads
+        self.num_heads_ = num_heads // world_size
         self.head_dim_ = head_dim
-        self.num_key_value_heads_ = num_key_value_heads
+        self.num_key_value_heads_ = num_key_value_heads // world_size
         assert self.num_heads_ % self.num_key_value_heads_ == 0, f"num_heads: {self.num_heads_}, num_key_value_heads: {self.num_key_value_heads_}, can not be divided"
         self.kv_group_num_ = self.num_heads_ // self.num_key_value_heads_
         self.layer_idx_ = layer_idx
         self.eps = 1e-6
         self.sm_scale = 1.0 / (self.head_dim_ ** 0.5)
+        self.tp_rank_ = tp_rank
         
     def Forward(self, hidden_states: torch.Tensor, position_embeddings: torch.Tensor, model_inputs, kv_cache):
         residual = hidden_states
         hidden_states = self._InputLayernorm(hidden_states)
         q, k, v = self._QkvCompute(hidden_states)
         hidden_states = self._ComputeAttnScore(q, k, v, position_embeddings, model_inputs, kv_cache)
+        before_hidden_states = hidden_states
+        dist.all_reduce(hidden_states, op=dist.ReduceOp.SUM)
         hidden_states = residual + hidden_states
         residual = hidden_states
         hidden_states = self._FfnNorm(hidden_states)
         hidden_states = self._Ffn(hidden_states)
+        dist.all_reduce(hidden_states, op=dist.ReduceOp.SUM)
         hidden_states = residual + hidden_states
         return hidden_states
     
@@ -57,6 +62,7 @@ class Qwen2TransformerLayer:
         q = input @ self.layer_weight.q_proj.proj.transpose(-2, -1).to(torch.float32) + self.layer_weight.q_proj.bias.to(torch.float32)
         k = input @ self.layer_weight.k_proj.proj.transpose(-2, -1).to(torch.float32) + self.layer_weight.k_proj.bias.to(torch.float32)
         v = input @ self.layer_weight.v_proj.proj.transpose(-2, -1).to(torch.float32) + self.layer_weight.v_proj.bias.to(torch.float32)
+
         return q, k, v
     
     def _ComputeQK(self, q, k, cos, sin, model_inputs):
@@ -99,13 +105,14 @@ class Qwen2TransformerLayer:
 
     def _ComputeAttnScore(self, q, k, v, position_embeddings, model_inputs, kv_cache):
         hidden_states_shape = q.shape
-        
+
         q = q.reshape(q.size(0), self.num_heads_, self.head_dim_)
         k = k.reshape(k.size(0), self.num_key_value_heads_, self.head_dim_)
         v = v.reshape(v.size(0), self.num_key_value_heads_, self.head_dim_)
+
         cos, sin = position_embeddings
         q, k = self._ComputeQK(q, k, cos, sin, model_inputs)
-        
+
         q = q.to(torch.float16)
         k = k.to(torch.float16)
         v = v.to(torch.float16)
@@ -139,5 +146,6 @@ class Qwen2TransformerLayer:
         attn_score = attn_score.reshape(*hidden_states_shape)
         attn_score = attn_score @ self.layer_weight.o_proj.proj.transpose(-2, -1)
         if self.layer_weight.o_proj.bias is not None:
+            # 一般这里没有bias
             attn_score = attn_score + self.layer_weight.o_proj.bias
         return attn_score

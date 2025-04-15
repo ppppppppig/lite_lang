@@ -64,20 +64,20 @@ class ModelInput:
     kv_start_idx: torch.Tensor
     past_key_values: Cache = None
     output_tokens: torch.Tensor = None
-    
+
     def update(self, output_tokens: torch.Tensor):
         self.is_prefill = False
         self.output_tokens = output_tokens.squeeze(1)
 
         self.input_tokens, self.position_ids, self.b_start_idx, self.b_seq_len, self.kv_start_idx = get_no_padding_messages(self.reqs, self.is_prefill)
-    
+
     def get_post_sample_para(self):
         temperatures = torch.tensor([req.temperature for req in self.reqs]).cuda()
         top_p = torch.tensor([req.top_p for req in self.reqs]).cuda()
         top_k = torch.tensor([req.top_k for req in self.reqs]).cuda()
         do_sample = torch.tensor([req.do_sample for req in self.reqs]).cuda()
         return temperatures, top_p, top_k, do_sample
-    
+
     # 为了屏蔽bug，修改这里，只要有请求停止，batch停止, 否则由于kv cache长度限制，可能导致程序崩溃，后面开发连续批处理时解决这个问题
     def view_is_end(self):
         for req in self.reqs:
@@ -86,7 +86,7 @@ class ModelInput:
                 return
             
         self.is_batch_end = False
-    
+
     # 更新请求信息，目前只更新了input_length
     def update_reqs_message(self, b_seq_len):
         req_lengths = b_seq_len.tolist()
@@ -104,7 +104,7 @@ class ReqManager:
         self.max_id = 100000
         self.max_total_length_ = max_total_length
         self.max_output_length_ = max_output_length
-        
+
     def add(self, prompt, top_p, top_k, temperature, do_sample):
         
         input_tokens = self.tokenizer_.encode_single(prompt)[0]
@@ -124,7 +124,7 @@ class ReqManager:
             return None
 
         input_tokens, position_ids, b_start_idx, b_seq_len, kv_start_idx = get_no_padding_messages(input_reqs, is_prefill=True)
-        
+
         model_inputs = ModelInput(
             reqs = input_reqs,
             input_tokens = input_tokens,
@@ -138,7 +138,7 @@ class ReqManager:
         
         model_inputs.update_reqs_message(b_seq_len)
         return model_inputs
-        
+
     def update_req(self, model_outputs, output_token_ids):
         output_prompts = self.tokenizer_.decode(output_token_ids)
         for req_idx in range(len(output_prompts)):
@@ -146,4 +146,3 @@ class ReqManager:
         model_outputs.update(output_token_ids)
         model_outputs.view_is_end()
         return model_outputs
-    

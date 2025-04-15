@@ -13,13 +13,12 @@ import click
 @click.option("--max-output-length", default=20, type=int, help="最大输出长度")
 @click.option("--max-input-length", default=20, type=int, help="最大输入长度")
 @click.option("--max-batch-size", default=32, type=int, help="最大batchsize")
-@click.option("--device", default='cuda', type=str, help="设备类型")
-@click.option("--device_id", default=3, type=int, help="设备ID")
+@click.option("--tp", default=1, type=int, help="tp并行数")
 @click.option("--port", default=8080, type=int, help="监听端口")
 @click.option('--mem_usage', default=0.5, type=float, help="显存使用率")
-def run_server(model_path, max_output_length, max_batch_size, max_input_length, device, device_id, port, mem_usage):
-    device = f'{device}:{device_id}'
-    http_server_manager = HttpServerManager(model_path, max_input_length, max_output_length, max_batch_size, mem_usage, device)
+@click.option('--max_reqs', default=1000, type=float, help="就绪队列最大请求数")
+def run_server(model_path, max_output_length, max_batch_size, max_input_length, tp, port, mem_usage, max_reqs):
+    http_server_manager = HttpServerManager(model_path, max_input_length, max_output_length, max_batch_size, mem_usage, tp, max_reqs)
     api_server.g_objs.http_server_manager = http_server_manager
     uvicorn.run("test_server:api_server.app", host="0.0.0.0", port=port)
 

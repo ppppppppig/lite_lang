@@ -121,7 +121,7 @@ class FreeReq:
 # 暂时只处理page=1的情况
 @dataclass
 class PageCache:
-    def __init__(self, max_batch_size, max_length, mem_usage, num_layers, head_dim, num_key_value_heads, torch_dtype=torch.float16):
+    def __init__(self, max_batch_size, max_length, mem_usage, num_layers, head_dim, num_key_value_heads, torch_dtype=torch.float16, tp_rank=0, tp_world_size=1):
         self.kv_cache_ = None
         self.req_to_tokens_ = None
         self.free_req_ = None
@@ -132,7 +132,8 @@ class PageCache:
         self.token_size_ = None
         
         # 模型相关参数
-        self.num_key_value_heads_ = num_key_value_heads
+        assert num_key_value_heads % tp_world_size == 0, "num_key_value_heads_ should be divisible by tp_world_size_"
+        self.num_key_value_heads_ = num_key_value_heads // tp_world_size
         self.torch_dtype_ = torch_dtype
         self.dtype_size_ = get_dtype_size(self.torch_dtype_)
         self.num_layers_ = num_layers
@@ -142,6 +143,8 @@ class PageCache:
         self.max_batch_size_ = max_batch_size
         self.max_length_ = max_length
         self.memory_usage_ = mem_usage
+        self.tp_rank_ = tp_rank
+        self.tp_world_size_ = tp_world_size
         
         self._init_token_size()
         self._init_size()
@@ -149,7 +152,7 @@ class PageCache:
         self._init_index()
         
     def _init_token_size(self):
-        self.token_size_ = self.head_dim_ * self.num_key_value_heads_ * 2 * self.dtype_size_ * self.num_layers_ / 1024
+        self.token_size_ = self.head_dim_ * self.num_key_value_heads_ * 2 * self.dtype_size_ * self.num_layers_ / 1024 / self.tp_world_size_
     
     def _init_kv_buffer(self):
         self.kv_cache_ = torch.empty((self.num_layers_, self.kv_max_size_, self.num_key_value_heads_ * 2, self.head_dim_), dtype=self.torch_dtype_).cuda()

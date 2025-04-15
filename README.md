@@ -16,8 +16,8 @@
 | ----------- | ------ | ------ |
 | v0.1  | 1.支持流式接口<br>2.支持qwen2-1.5B   | 已发布 |  
 | v0.2  | 开发rmsnorm/ffn/flash_attn/rope等算子，大幅提高推理性能  | 已发布 |
-| v0.3  | 支持NoPadding输入与kv cache，以及flash decoding | 已发布 |
-| v0.4  | 支持多TP，支持qwq-32B模型部署 | 未开发 |
+| v0.3  | 支持NoPadding输入与page attention，以及flash decoding | 已发布 |
+| v0.4  | 支持多TP，支持qwq-32B模型部署 | 正在开发中 |
 | v0.5  | 支持连续批处理 | 未开发 |
 
 
@@ -41,3 +41,8 @@ bash test/start_multi_req.sh
 | 1  | 使用flast attn算子时，偶发输出不对  | 已解决（flash attn算子存在越界写错误） |
 | 2  | 当组batch推理长度不同的prompt时，最长的prompt必须在batch最前，否则会崩溃  | 更新算子后已解决 |  
 | 3  | attn计算时q，k,v必须和  | 应该是flash_attn算子导致的问题，暂时不定位，后续开发kv_cache和no_padding需要更改该算子 |  
+
+
+### 6.需要填的小坑
+
+1.在没有使用多进程的时候，推理速度为17tokens/s，加了进程模型后，变成了10tokens/s，rpc造成了非常大的通信开销。后续需要避免，最简单的优化方案是当使用tp=1时，不要使用rpc

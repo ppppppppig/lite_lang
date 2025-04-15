@@ -6,7 +6,12 @@ def max_diff(a_path, b_path):
     a = torch.load(a_path).cpu()
     b = torch.load(b_path).cpu()
     # 计算最大差异
-    max_difference = torch.max(torch.abs(b - a))
+    a = a.unsqueeze(1)
+    print(f"a.shape: {a.shape}")
+    print(f"b.shape: {b.shape}")  
+    max_difference = torch.max(torch.abs(b - a)) 
+    print(f"b - a: {b - a}")
+    print(f"max diff: {max_difference}")
 
 def main():
     # 创建 ArgumentParser 对象
