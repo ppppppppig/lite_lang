@@ -54,11 +54,15 @@ class SchedulerRunnerQue:
         self.reqs.append(req)
         
     def update_from_forward(self, output_prompts, output_token_ids, eos_token_id):
-        
+        self.is_end_ = True
+        stop_req_ids = []
         for req_idx in range(len(output_prompts)):
             self.reqs[req_idx].Add(output_prompts[req_idx], output_token_ids[req_idx, :] == eos_token_id)
-            if self.reqs[req_idx].is_end  == True:
-                self.is_end_ = True
+            if self.reqs[req_idx].is_end  == False:
+                self.is_end_ = False
+            else:
+                stop_req_ids.append(self.reqs[req_idx].id)
+        return stop_req_ids
 
     def is_end(self):
         return self.is_end_
@@ -71,6 +75,7 @@ class SchedulerRunnerQue:
         for req in self.reqs:
             input_tokens = req.input_tokens
             reqs_data.append({
+                'id': req.id,
                 "input_tokens": input_tokens,
                 "temperature": req.temperature,
                 "top_p": req.top_p,
@@ -137,5 +142,8 @@ class Scheduler:
     
     def update_from_forward(self, output_token_ids):
         output_prompts = self.tokenizer_.decode(output_token_ids)
-        is_end = self.running_que_.update_from_forward(output_prompts, output_token_ids, self.tokenizer_.eos_token_id)
-        return is_end
+        stop_req_ids = self.running_que_.update_from_forward(output_prompts, output_token_ids, self.tokenizer_.eos_token_id)
+        return stop_req_ids
+
+    def filter_stop_req(self):
+        

@@ -90,7 +90,7 @@ class Qwen2ModelRunner:
 
     def forward(self, model_inputs):
         if model_inputs.is_prefill:
-            for req in model_inputs.reqs:
+            for req in model_inputs.request_mapping.values():
                 req.rid = self._add_new_req(req.input_length)
                 if req.rid is None:
                     return False
@@ -101,8 +101,8 @@ class Qwen2ModelRunner:
             return self.kv_cache_.alloc_req()
         else:
             return None
-        
-    def free_all(self, reqs):
+    
+    def free_reqs(self, reqs):
         self.kv_cache_.dealloc_reqs(reqs)
     
     def init_model(self):

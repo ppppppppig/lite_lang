@@ -1,5 +1,3 @@
-
-from .req_manager import Req, ReqManager
 from .model_rpc import ModelClientRPC
 from .scheduler import Scheduler
 from .model import Qwen2ModelRunner, Qwen2Config
@@ -48,10 +46,33 @@ class HttpServerManager:
             self.scheduler_.update_from_forward(output_token_ids)
             while not runner_batch.is_end():
                 output_token_ids = self.model_client_.decode(batch_id)
-                self.scheduler_.update_from_forward(output_token_ids)
+                stop_req_ids = self.scheduler_.update_from_forward(output_token_ids)
+                if len(stop_req_ids):
+                    self.model_client_.filter
+            self.model_client_.remove_batch(batch_id)
             for req in runner_batch.reqs:
                 all_tokens_length += req.length
             end_time = time.perf_counter()
             tokens_per_second = all_tokens_length / (end_time - start_time)
             print(f"生成速度: {tokens_per_second:.2f} tokens/秒")
-            self.model_client_.remove_batch(batch_id)
+
+    # # 每推理十次，尝试进行continous_batch
+    # def continous_batch(self):
+    #     times = 0
+    #     decode_batch_id = 0
+    #     while True:
+    #         times += 1
+    #         if times % 10 == 0:
+    #             times = 0
+    #             # 尝试看看是否能获取新的请求
+    #             runner_batch, prefill_batch_id = self.scheduler_.get_runner_batch()
+    #             if runner_batch.is_empty():
+    #                 continue
+    #             self.model_client_.add_batch(runner_batch, prefill_batch_id)
+    #             output_token_ids = self.model_client_.prefill(prefill_batch_id)
+    #             self.scheduler_.update_from_forward(output_token_ids)
+                
+    #             # 跟以前的请求合并
+    #             decode_batch_id = self.model_client_.merge_batch(decode_batch_id, prefill_batch_id)
+                
+    #         self.model_client_.decode(decode_batch_id)

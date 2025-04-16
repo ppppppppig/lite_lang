@@ -118,16 +118,16 @@ class Qwen2TransformerLayer:
         v = v.to(torch.float16)
         
         if model_inputs.is_prefill:
-            kv_cache.write_prefill_kv_cache(model_inputs.reqs, model_inputs.b_start_idx, self.layer_idx_, k, v)
-            token_idxs = kv_cache.get_token_index(model_inputs.reqs)
+            kv_cache.write_prefill_kv_cache(model_inputs.request_mapping.values(), model_inputs.b_start_idx, self.layer_idx_, k, v)
+            token_idxs = kv_cache.get_token_index(model_inputs.request_mapping.values())
             after_k, after_v = kv_cache.kv_cache_[self.layer_idx_, token_idxs, :self.num_key_value_heads_], kv_cache.kv_cache_[self.layer_idx_, token_idxs, self.num_key_value_heads_:]
         else:
-            token_idxs = kv_cache.write_decode_kv_cache(model_inputs.reqs, model_inputs.b_start_idx, self.layer_idx_, k, v)
+            token_idxs = kv_cache.write_decode_kv_cache(model_inputs.request_mapping.values(), model_inputs.b_start_idx, self.layer_idx_, k, v)
             k, v = kv_cache.kv_cache_[self.layer_idx_, token_idxs, :self.num_key_value_heads_], kv_cache.kv_cache_[self.layer_idx_, token_idxs, self.num_key_value_heads_:]
         if not model_inputs.is_prefill:
             if not q.is_contiguous():
                 q = q.contiguous()
-            b_req_idx = [req.rid for req in model_inputs.reqs]
+            b_req_idx = [req.rid for req in model_inputs.request_mapping.values()]
             b_req_idx = torch.tensor(b_req_idx, dtype=torch.int32).cuda()
             attn_score = torch.zeros_like(q)
             
@@ -137,7 +137,7 @@ class Qwen2TransformerLayer:
         else:
             if not q.is_contiguous():
                 q = q.contiguous()
-            b_req_idx = [req.rid for req in model_inputs.reqs]
+            b_req_idx = [req.rid for req in model_inputs.request_mapping.values()]
             b_req_idx = torch.tensor(b_req_idx, dtype=torch.int32).cuda()
             attn_score = torch.zeros_like(q)
             context_attention_fwd_with_no_pad_and_kv_cache(q, kv_cache.kv_cache_[self.layer_idx_, :, :self.num_key_value_heads_], kv_cache.kv_cache_[self.layer_idx_, :, self.num_key_value_heads_:], attn_score, b_req_idx, model_inputs.b_start_idx, model_inputs.b_seq_len, max_input_len=model_inputs.b_seq_len.max().item(), req_to_token_indexs=kv_cache.req_to_tokens_)

@@ -189,7 +189,12 @@ class PageCache:
         rid = self.free_req_.alloc_new_req()
         return rid
     
-    def free_req(self, rid):
+    def free_req(self, req):
+        rid = req.rid
+        length = req.length - 1
+        
+        token_idxs = self.req_to_tokens_[rid, :length]
+        self.free_token_idxs(token_idxs)
         self.free_req_.free_req(rid)
         return True
     
@@ -222,12 +227,7 @@ class PageCache:
             
     def dealloc_reqs(self, reqs):
         for req in reqs:
-            rid = req.rid
-            length = req.length - 1
-            
-            token_idxs = self.req_to_tokens_[rid, :length]
-            self.free_token_idxs(token_idxs)
-            self.free_req(rid)
+            self.free_req(req)
 
     def can_allocated(self, length):
         if self.physical_free_token_start_ + length > self.physical_free_token_end_:

@@ -1,5 +1,6 @@
 import torch
 from dataclasses import dataclass
+from typing import Dict
 
 def get_no_padding_messages(input_reqs, is_prefill=True):
     position_ids = []
@@ -55,7 +56,7 @@ class RunnerReq:
 @dataclass
 class RunnerBatch:
     id: int
-    reqs: list[RunnerReq]
+    request_mapping: Dict[int, RunnerReq]
     input_tokens: torch.Tensor  # NoPadding形式的输入，prefill的输入
     position_ids: torch.Tensor  # 输入的token在原始文本中的位置
     b_start_idx: torch.Tensor   # 每个请求的起始位置
@@ -65,8 +66,9 @@ class RunnerBatch:
     
     @staticmethod
     def create_batch(req_messages, batch_id, is_prefill: bool = True) -> 'RunnerBatch':
-        reqs = []
+        request_mapping = {}
         for message in req_messages:
+            request_id = message['id']
             input_tokens = message['input_tokens']
             new_req = RunnerReq.create_runner_req(
                 input_tokens=input_tokens,
@@ -75,11 +77,11 @@ class RunnerBatch:
                 top_k=message['top_k'],
                 do_sample=message['do_sample']
             )
-            reqs.append(new_req)
-        input_tokens, position_ids, b_start_idx, b_seq_len = get_no_padding_messages(reqs, is_prefill)
+            request_mapping[request_id] = new_req
+        input_tokens, position_ids, b_start_idx, b_seq_len = get_no_padding_messages(request_mapping.values(), is_prefill)
         return RunnerBatch(
             id=batch_id,
-            reqs=reqs,
+            request_mapping=request_mapping,
             is_prefill=is_prefill,
             input_tokens=input_tokens,
             position_ids=position_ids,
@@ -89,21 +91,31 @@ class RunnerBatch:
         )
         
     def get_post_sample_para(self):
-        temperatures = torch.tensor([req.temperature for req in self.reqs]).cuda()
-        top_p = torch.tensor([req.top_p for req in self.reqs]).cuda()
-        top_k = torch.tensor([req.top_k for req in self.reqs]).cuda()
-        do_sample = torch.tensor([req.do_sample for req in self.reqs]).cuda()
+        temperatures = torch.tensor([req.temperature for req in self.request_mapping.values()]).cuda()
+        top_p = torch.tensor([req.top_p for req in self.request_mapping.values()]).cuda()
+        top_k = torch.tensor([req.top_k for req in self.request_mapping.values()]).cuda()
+        do_sample = torch.tensor([req.do_sample for req in self.request_mapping.values()]).cuda()
         return temperatures, top_p, top_k, do_sample
     
-    # def update_reqs_message(self, b_seq_len):
-    #     req_lengths = b_seq_len.tolist()
-    #     for idx, length in enumerate(req_lengths):
-    #         self.reqs[idx].input_length = length
+    def filter(self, req_ids):
+        new_reqs = []
+        new_output_token_ids = []
+        should_free_reqs = []
+        for req_id in req_ids:
+            should_free_reqs.append(self.request_mapping.pop(req_id))
+        for req in self.request_mapping.values():
+            new_output_token_ids.append(req.output_tokens[-1])
+        is_prefill = False
+        self.input_tokens, self.position_ids, self.b_start_idx, self.b_seq_len = get_no_padding_messages(new_reqs, is_prefill)
+        self.output_token_ids = torch.tensor(new_output_token_ids).cuda()
+        return should_free_reqs
             
     def update_forward_message(self, output_token_ids):
         self.is_prefill = False
         self.output_token_ids = output_token_ids.squeeze(1)
-        for idx, req in enumerate(self.reqs):
+        print(f"output_token_ids: {output_token_ids}")
+        print(f"request_mapping: {self.request_mapping}")
+        for idx, req in enumerate(self.request_mapping.values()):
             req.update_forward_message(output_token_ids[idx].item())
-        self.input_tokens, self.position_ids, self.b_start_idx, self.b_seq_len = get_no_padding_messages(self.reqs, self.is_prefill)
+        self.input_tokens, self.position_ids, self.b_start_idx, self.b_seq_len = get_no_padding_messages(self.request_mapping.values(), self.is_prefill)
         # self.update_reqs_message(self.b_seq_len)

@@ -51,15 +51,24 @@ class ModelServerRpc(rpyc.Service):
     def decode(self, batch_id):
         batch_id = obtain(batch_id)
         output_token_ids = self.model_runner_.forward(self.batchs_[batch_id])
+        print(f"batchs: {self.batchs_.keys()}")
         self.batchs_[batch_id].update_forward_message(output_token_ids)
         return output_token_ids
     
     def remove_batch(self, batch_id):
         batch_id = obtain(batch_id)
+        print(f"batchs: {self.batchs_.keys()}")
+        self.model_runner_.free_reqs(self.batchs_[batch_id].request_mapping.values())
         if batch_id in self.batchs_:
             del self.batchs_[batch_id]
             return True
         return False
+    
+    def filter_batch(self, batch_id, req_ids):
+        batch_id = obtain(batch_id)
+        should_free_reqs = self.batchs_[batch_id].filter(req_ids)
+        self.model_runner_.free_reqs(should_free_reqs)
+        return True
 
 def run_server(tp_rank, world_size, port, ready_queue, max_batch_size, config, model_path, max_total_length, mem_usage, max_input_length):
     sys.stdin = open('/dev/tty', 'r')
@@ -93,6 +102,7 @@ class ModelClientRPC:
             self.prefill = self._prefill_rpc
             self.decode = self._decode_rpc
             self.remove_batch = self._remove_batch_rpc
+            self.filter_batch = self._filter_batch_rpc
         else:
             conn = ModelServerRpc(max_batch_size=max_batch_size, max_input_length=max_input_length, config=config, model_path=model_path, max_total_length=max_total_length, mem_usage=mem_usage, tp_rank=0, world_size=1)
             self.connections_.append(conn)
@@ -102,6 +112,7 @@ class ModelClientRPC:
             self.prefill = self._prefill
             self.decode = self._decode
             self.remove_batch = self._remove_batch
+            self.filter_batch = self._filter_batch
             
     
     def create_processor(self, max_batch_size, config, model_path, max_total_length, mem_usage, max_input_length):
@@ -172,6 +183,12 @@ class ModelClientRPC:
             output_token_ids = conn.root.remove_batch(batch_id)
         return output_token_ids
     
+    def _filter_batch_rpc(self, batch_id, req_ids):
+        with concurrent.futures.ThreadPoolExecutor() as executor:
+            futures = [executor.submit(conn.root.filter_batch, batch_id, req_ids) for conn in self.connections_]
+        is_finish = futures[-1].result()
+        return obtain(is_finish)    
+    
     def _init_model(self):
         kv_max_size = self.connections_[0].init_model()
         return kv_max_size
@@ -191,3 +208,7 @@ class ModelClientRPC:
     def _remove_batch(self, batch_id):
         output_token_ids = self.connections_[0].remove_batch(batch_id)
         return output_token_ids
+    
+    def _filter_batch(self, batch_id, req_ids):
+        is_finish = self.connections_[0].filter_batch(batch_id, req_ids)
+        return is_finish
