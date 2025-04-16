@@ -9,6 +9,7 @@ import sys
 import torch.distributed as dist
 import concurrent.futures
 import torch
+from rpyc.utils.classic import obtain
 
 # 如果tp=1, 本地运行，否则开销过大
 class ModelServerRpc(rpyc.Service):
@@ -28,7 +29,6 @@ class ModelServerRpc(rpyc.Service):
         self.model_runner_ = Qwen2ModelRunner(config.layer_nums, kwargs['max_batch_size'], config, model_path=kwargs['model_path'], 
                                               max_length=kwargs['max_total_length'], mem_usage=kwargs['mem_usage'], 
                                               tp_rank=self.tp_rank_, world_size=self.world_size_, max_input_length=kwargs['max_input_length'])
-
         self.batchs_ = {}
 
     def init_model(self):
@@ -37,21 +37,25 @@ class ModelServerRpc(rpyc.Service):
         return kv_max_size
     
     def add_batch(self, req_messages, batch_id):
+        batch_id = obtain(batch_id)
         batch = RunnerBatch.create_batch(req_messages, batch_id, is_prefill=True)
         self.batchs_[batch_id] = batch
         return True
     
     def prefill(self, batch_id):
+        batch_id = obtain(batch_id)
         output_token_ids = self.model_runner_.forward(self.batchs_[batch_id])
         self.batchs_[batch_id].update_forward_message(output_token_ids)
         return output_token_ids
     
     def decode(self, batch_id):
+        batch_id = obtain(batch_id)
         output_token_ids = self.model_runner_.forward(self.batchs_[batch_id])
         self.batchs_[batch_id].update_forward_message(output_token_ids)
         return output_token_ids
     
     def remove_batch(self, batch_id):
+        batch_id = obtain(batch_id)
         if batch_id in self.batchs_:
             del self.batchs_[batch_id]
             return True
@@ -59,7 +63,7 @@ class ModelServerRpc(rpyc.Service):
 
 def run_server(tp_rank, world_size, port, ready_queue, max_batch_size, config, model_path, max_total_length, mem_usage, max_input_length):
     sys.stdin = open('/dev/tty', 'r')
-    service = ModelServerRpc(port=port, max_batch_size=max_batch_size, max_input_length=max_input_length, config=config, model_path=model_path, max_total_length=max_total_length, mem_usage=mem_usage, tp_rank=tp_rank, world_size=world_size)
+    service = ModelServerRpc(max_batch_size=max_batch_size, max_input_length=max_input_length, config=config, model_path=model_path, max_total_length=max_total_length, mem_usage=mem_usage, tp_rank=tp_rank, world_size=world_size)
     server = ThreadedServer(service, port=port, protocol_config={
             "allow_public_attrs": True,
             "allow_pickle": True,
@@ -81,7 +85,24 @@ class ModelClientRPC:
         self.connections_ = []
         self.world_size_ = world_size
         self.processor_ = []
-        self.create_processor(max_batch_size, config, model_path, max_total_length, mem_usage, max_input_length)
+        if self.world_size_ > 1:
+            self.create_processor(max_batch_size, config, model_path, max_total_length, mem_usage, max_input_length)   
+            
+            self.init_model = self._init_model_rpc
+            self.add_batch = self._add_batch_rpc
+            self.prefill = self._prefill_rpc
+            self.decode = self._decode_rpc
+            self.remove_batch = self._remove_batch_rpc
+        else:
+            conn = ModelServerRpc(max_batch_size=max_batch_size, max_input_length=max_input_length, config=config, model_path=model_path, max_total_length=max_total_length, mem_usage=mem_usage, tp_rank=0, world_size=1)
+            self.connections_.append(conn)
+                
+            self.init_model = self._init_model
+            self.add_batch = self._add_batch
+            self.prefill = self._prefill
+            self.decode = self._decode
+            self.remove_batch = self._remove_batch
+            
     
     def create_processor(self, max_batch_size, config, model_path, max_total_length, mem_usage, max_input_length):
         mp.set_start_method('spawn')
@@ -121,32 +142,52 @@ class ModelClientRPC:
             p.terminate()
             p.join()
 
-    def init_model(self):
+    def _init_model_rpc(self):
         
         with concurrent.futures.ThreadPoolExecutor() as executor:
             futures = [executor.submit(conn.root.init_model) for conn in self.connections_]
         kv_max_size = futures[-1].result()
         return kv_max_size        
             
-    def add_batch(self, runner_batch, batch_id):
+    def _add_batch_rpc(self, runner_batch, batch_id):
         for conn in self.connections_:
             conn.root.add_batch(runner_batch.get_transfer_data(), batch_id)
     
-    def prefill(self, batch_id):
+    def _prefill_rpc(self, batch_id):
         with concurrent.futures.ThreadPoolExecutor() as executor:
             futures = [executor.submit(conn.root.prefill, batch_id) for conn in self.connections_]
         output_token_ids = futures[-1].result()
+        output_token_ids = obtain(output_token_ids)
         return output_token_ids        
     
-    def decode(self, batch_id):
+    def _decode_rpc(self, batch_id):
         with concurrent.futures.ThreadPoolExecutor() as executor:
             futures = [executor.submit(conn.root.decode, batch_id) for conn in self.connections_]
         output_token_ids = futures[-1].result()
+        output_token_ids = obtain(output_token_ids)
         return output_token_ids             
-
     
-    def remove_batch(self, batch_id):
+    def _remove_batch_rpc(self, batch_id):
         for conn in self.connections_:
             output_token_ids = conn.root.remove_batch(batch_id)
         return output_token_ids
     
+    def _init_model(self):
+        kv_max_size = self.connections_[0].init_model()
+        return kv_max_size
+    
+    def _add_batch(self, runner_batch, batch_id):
+        self.connections_[0].add_batch(runner_batch.get_transfer_data(), batch_id)
+        
+    def _prefill(self, batch_id):
+        output_token_ids = self.connections_[0].prefill(batch_id)
+        
+        return output_token_ids
+
+    def _decode(self, batch_id):
+        output_token_ids = self.connections_[0].decode(batch_id)
+        return output_token_ids
+    
+    def _remove_batch(self, batch_id):
+        output_token_ids = self.connections_[0].remove_batch(batch_id)
+        return output_token_ids
