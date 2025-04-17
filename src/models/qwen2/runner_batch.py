@@ -30,6 +30,7 @@ class RunnerReq:
     top_p: float = 0.0
     top_k: float = 0.0
     do_sample: bool = False
+    max_output_length = 
     
     @staticmethod
     def create_runner_req(input_tokens: list[int], temperature: float, top_p: float, top_k: float, do_sample: bool) -> 'RunnerReq':
@@ -52,6 +53,8 @@ class RunnerReq:
         if self.output_tokens is None:
             self.output_tokens = []
         self.output_tokens.append(token_id)
+
+
 
 @dataclass
 class RunnerBatch:

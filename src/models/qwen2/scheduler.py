@@ -34,16 +34,25 @@ class Req:
         if is_eos_token or (self.output_length + self.input_length >= self.max_total_length and self.output_length >= self.max_output_length):
             self.is_end = True
         self.output_prompt_que.put((text, self.is_end))
-    
+
     @property
     def length(self):
         return self.input_length + self.output_length
-    
+
     def next_forward_need_tokens(self):
         if self.is_prefill:
             return self.input_length
         else:
             return 1
+
+    def need_tokens(self, system_temperature):
+        has_been_take_tokens = self.input_length + self.output_length
+        
+        expect_remaining_tokens = self.max_output_length * system_temperature
+        if self.output_length >= expect_remaining_tokens:
+            expect_remaining_tokens = self.max_output_length
+        return torch.tensor([has_been_take_tokens, expect_remaining_tokens], dtype=torch.int64)
+            
 
 class SchedulerRunnerQue:
     def __init__(self):
@@ -83,6 +92,26 @@ class SchedulerRunnerQue:
                 "do_sample": req.do_sample,
             })
         return reqs_data
+    
+    def need_tokens(self):
+        req_need_tokens = torch.stack([req.need_tokens() for req in self.reqs], dim=0)
+        
+        sorted_indices = torch.argsort(req_need_tokens[:, -1], descending=True)
+        sorted_tokens = req_need_tokens[sorted_indices]
+        
+        take_tokens = sorted_tokens[:, 0]
+        remain_tokens = sorted_tokens[:, 1]
+        
+        cumulative_take = take_tokens.cumsum(dim=0)
+        
+        indices = torch.arange(1, len(self.reqs)+1)
+        
+        total_estimates = cumulative_take + remain_tokens * indices
+        
+         
+        return torch.max(total_estimates).item()
+            
+        
 
 class ReadyQue:
     def __init__(self, max_reqs, max_input_length, max_output_length, max_sum_kv_tokens):
@@ -144,6 +173,4 @@ class Scheduler:
         output_prompts = self.tokenizer_.decode(output_token_ids)
         stop_req_ids = self.running_que_.update_from_forward(output_prompts, output_token_ids, self.tokenizer_.eos_token_id)
         return stop_req_ids
-
-    def filter_stop_req(self):
         
