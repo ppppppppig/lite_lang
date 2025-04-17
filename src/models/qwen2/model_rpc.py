@@ -42,6 +42,12 @@ class ModelServerRpc(rpyc.Service):
         self.batchs_[batch_id] = batch
         return True
     
+    def merge_batch(self, batch_id, new_batch_id):
+        batch_id, new_batch_id = obtain(batch_id), obtain(new_batch_id)
+        self.batchs_[batch_id].update(self.batchs_[new_batch_id])
+        del self.batchs_[new_batch_id]
+        return True
+    
     def prefill(self, batch_id):
         batch_id = obtain(batch_id)
         output_token_ids = self.model_runner_.forward(self.batchs_[batch_id])
@@ -103,6 +109,7 @@ class ModelClientRPC:
             self.decode = self._decode_rpc
             self.remove_batch = self._remove_batch_rpc
             self.filter_batch = self._filter_batch_rpc
+            self.merge_batch = self._merge_batch_rpc
         else:
             conn = ModelServerRpc(max_batch_size=max_batch_size, max_input_length=max_input_length, config=config, model_path=model_path, max_total_length=max_total_length, mem_usage=mem_usage, tp_rank=0, world_size=1)
             self.connections_.append(conn)
@@ -113,8 +120,8 @@ class ModelClientRPC:
             self.decode = self._decode
             self.remove_batch = self._remove_batch
             self.filter_batch = self._filter_batch
+            self.merge_batch = self._merge_batch
             
-    
     def create_processor(self, max_batch_size, config, model_path, max_total_length, mem_usage, max_input_length):
         mp.set_start_method('spawn')
         reserve_sockets = []
@@ -154,7 +161,6 @@ class ModelClientRPC:
             p.join()
 
     def _init_model_rpc(self):
-        
         with concurrent.futures.ThreadPoolExecutor() as executor:
             futures = [executor.submit(conn.root.init_model) for conn in self.connections_]
         kv_max_size = futures[-1].result()
@@ -162,7 +168,7 @@ class ModelClientRPC:
             
     def _add_batch_rpc(self, runner_batch, batch_id):
         for conn in self.connections_:
-            conn.root.add_batch(runner_batch.get_transfer_data(), batch_id)
+            conn.root.add_batch(runner_batch, batch_id)
     
     def _prefill_rpc(self, batch_id):
         with concurrent.futures.ThreadPoolExecutor() as executor:
@@ -187,14 +193,20 @@ class ModelClientRPC:
         with concurrent.futures.ThreadPoolExecutor() as executor:
             futures = [executor.submit(conn.root.filter_batch, batch_id, req_ids) for conn in self.connections_]
         is_finish = futures[-1].result()
-        return obtain(is_finish)    
+        return obtain(is_finish)
+    
+    def _merge_batch_rpc(self, batch_id, new_batch_id):
+        with concurrent.futures.ThreadPoolExecutor() as executor:
+            futures = [executor.submit(conn.root.merge_batch, batch_id, new_batch_id) for conn in self.connections_]
+        is_finish = futures[-1].result()
+        return obtain(is_finish)
     
     def _init_model(self):
         kv_max_size = self.connections_[0].init_model()
         return kv_max_size
     
     def _add_batch(self, runner_batch, batch_id):
-        self.connections_[0].add_batch(runner_batch.get_transfer_data(), batch_id)
+        self.connections_[0].add_batch(runner_batch, batch_id)
         
     def _prefill(self, batch_id):
         output_token_ids = self.connections_[0].prefill(batch_id)
@@ -212,3 +224,7 @@ class ModelClientRPC:
     def _filter_batch(self, batch_id, req_ids):
         is_finish = self.connections_[0].filter_batch(batch_id, req_ids)
         return is_finish
+    
+    def _merge_batch(self, batch_id, new_batch_id):
+        is_finish = self.connections_[0].merge_batch(batch_id, new_batch_id)
+        return obtain(is_finish)

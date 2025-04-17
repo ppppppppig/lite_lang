@@ -17,8 +17,9 @@ import click
 @click.option("--port", default=8080, type=int, help="监听端口")
 @click.option('--mem_usage', default=0.5, type=float, help="显存使用率")
 @click.option('--max_reqs', default=1000, type=float, help="就绪队列最大请求数")
-def run_server(model_path, max_output_length, max_batch_size, max_input_length, tp, port, mem_usage, max_reqs):
-    http_server_manager = HttpServerManager(model_path, max_input_length, max_output_length, max_batch_size, mem_usage, tp, max_reqs)
+@click.option('--busy_scale', default=0.6, type=float, help="系统不繁忙时减小请求的最大生成长度，尝试调度更多请求去推理")
+def run_server(model_path, max_output_length, max_batch_size, max_input_length, tp, port, mem_usage, max_reqs, busy_scale):
+    http_server_manager = HttpServerManager(model_path, max_input_length, max_output_length, max_batch_size, mem_usage, tp, max_reqs, busy_scale)
     api_server.g_objs.http_server_manager = http_server_manager
     uvicorn.run("test_server:api_server.app", host="0.0.0.0", port=port)
 

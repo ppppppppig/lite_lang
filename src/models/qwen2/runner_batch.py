@@ -30,7 +30,6 @@ class RunnerReq:
     top_p: float = 0.0
     top_k: float = 0.0
     do_sample: bool = False
-    max_output_length = 
     
     @staticmethod
     def create_runner_req(input_tokens: list[int], temperature: float, top_p: float, top_k: float, do_sample: bool) -> 'RunnerReq':
@@ -53,7 +52,6 @@ class RunnerReq:
         if self.output_tokens is None:
             self.output_tokens = []
         self.output_tokens.append(token_id)
-
 
 
 @dataclass
@@ -101,7 +99,6 @@ class RunnerBatch:
         return temperatures, top_p, top_k, do_sample
     
     def filter(self, req_ids):
-        new_reqs = []
         new_output_token_ids = []
         should_free_reqs = []
         for req_id in req_ids:
@@ -109,7 +106,8 @@ class RunnerBatch:
         for req in self.request_mapping.values():
             new_output_token_ids.append(req.output_tokens[-1])
         is_prefill = False
-        self.input_tokens, self.position_ids, self.b_start_idx, self.b_seq_len = get_no_padding_messages(new_reqs, is_prefill)
+        # import pdb; pdb.set_trace()
+        self.input_tokens, self.position_ids, self.b_start_idx, self.b_seq_len = get_no_padding_messages(self.request_mapping.values(), is_prefill)
         self.output_token_ids = torch.tensor(new_output_token_ids).cuda()
         return should_free_reqs
             
@@ -122,3 +120,14 @@ class RunnerBatch:
             req.update_forward_message(output_token_ids[idx].item())
         self.input_tokens, self.position_ids, self.b_start_idx, self.b_seq_len = get_no_padding_messages(self.request_mapping.values(), self.is_prefill)
         # self.update_reqs_message(self.b_seq_len)
+        
+    def update(self, new_runner_batch):
+        assert self.is_prefill == False and new_runner_batch.is_prefill == False, "only decode batch can be merged"
+        new_output_token_ids = []
+        self.request_mapping.update(new_runner_batch.request_mapping)
+        self.input_tokens = torch.cat((self.input_tokens, new_runner_batch.input_tokens), dim=0) # 这个后续应该没啥用，没事，先留着
+        for req in self.request_mapping.values():
+            new_output_token_ids.append(req.output_tokens[-1])
+        self.input_tokens, self.position_ids, self.b_start_idx, self.b_seq_len = get_no_padding_messages(self.request_mapping.values(), is_prefill=False)
+        self.output_token_ids = torch.tensor(new_output_token_ids).cuda()
+        return True
