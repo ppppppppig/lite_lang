@@ -165,7 +165,7 @@ class PageCache:
         self.free_req_ = FreeReq(self.max_batch_size_)
         
     def _init_size(self):
-        self.kv_max_size_ = int((get_available_gpu_memory() * self.memory_usage_) // 2 * ( 1024 ** 2))
+        self.kv_max_size_ = int((get_available_gpu_memory() * self.memory_usage_) / 2 * ( 1024 ** 2))
         self.kv_max_size_ = int(self.kv_max_size_ // self.token_size_)
         assert self.kv_max_size_ > 0, "GPU memory is not enough to allocate cache."
     

@@ -51,19 +51,17 @@ class ModelServerRpc(rpyc.Service):
     def prefill(self, batch_id):
         batch_id = obtain(batch_id)
         output_token_ids = self.model_runner_.forward(self.batchs_[batch_id])
-        self.batchs_[batch_id].update_forward_message(output_token_ids)
-        return output_token_ids
+        req_ids = self.batchs_[batch_id].update_forward_message(output_token_ids)
+        return output_token_ids, req_ids
     
     def decode(self, batch_id):
         batch_id = obtain(batch_id)
         output_token_ids = self.model_runner_.forward(self.batchs_[batch_id])
-        print(f"batchs: {self.batchs_.keys()}")
-        self.batchs_[batch_id].update_forward_message(output_token_ids)
-        return output_token_ids
+        req_ids = self.batchs_[batch_id].update_forward_message(output_token_ids)
+        return output_token_ids, req_ids
     
     def remove_batch(self, batch_id):
         batch_id = obtain(batch_id)
-        print(f"batchs: {self.batchs_.keys()}")
         self.model_runner_.free_reqs(self.batchs_[batch_id].request_mapping.values())
         if batch_id in self.batchs_:
             del self.batchs_[batch_id]
@@ -71,6 +69,12 @@ class ModelServerRpc(rpyc.Service):
         return False
     
     def filter_batch(self, batch_id, req_ids):
+        batch_id = obtain(batch_id)
+        should_free_reqs = self.batchs_[batch_id].filter(req_ids)
+        self.model_runner_.free_reqs(should_free_reqs)
+        return True
+    
+    def swapped_reqs(self, batch_id, req_ids):
         batch_id = obtain(batch_id)
         should_free_reqs = self.batchs_[batch_id].filter(req_ids)
         self.model_runner_.free_reqs(should_free_reqs)
@@ -110,6 +114,7 @@ class ModelClientRPC:
             self.remove_batch = self._remove_batch_rpc
             self.filter_batch = self._filter_batch_rpc
             self.merge_batch = self._merge_batch_rpc
+            self.swapped_reqs = self._swapped_reqs_rpc
         else:
             conn = ModelServerRpc(max_batch_size=max_batch_size, max_input_length=max_input_length, config=config, model_path=model_path, max_total_length=max_total_length, mem_usage=mem_usage, tp_rank=0, world_size=1)
             self.connections_.append(conn)
@@ -121,6 +126,7 @@ class ModelClientRPC:
             self.remove_batch = self._remove_batch
             self.filter_batch = self._filter_batch
             self.merge_batch = self._merge_batch
+            self.swapped_reqs = self._swapped_reqs
             
     def create_processor(self, max_batch_size, config, model_path, max_total_length, mem_usage, max_input_length):
         mp.set_start_method('spawn')
@@ -173,21 +179,26 @@ class ModelClientRPC:
     def _prefill_rpc(self, batch_id):
         with concurrent.futures.ThreadPoolExecutor() as executor:
             futures = [executor.submit(conn.root.prefill, batch_id) for conn in self.connections_]
-        output_token_ids = futures[-1].result()
-        output_token_ids = obtain(output_token_ids)
-        return output_token_ids        
+        output_token_ids, req_ids = futures[-1].result()
+        output_token_ids, req_ids = obtain(output_token_ids), obtain(req_ids)
+        return output_token_ids, req_ids        
     
     def _decode_rpc(self, batch_id):
         with concurrent.futures.ThreadPoolExecutor() as executor:
             futures = [executor.submit(conn.root.decode, batch_id) for conn in self.connections_]
-        output_token_ids = futures[-1].result()
-        output_token_ids = obtain(output_token_ids)
-        return output_token_ids             
+        output_token_ids, req_ids = futures[-1].result()
+        output_token_ids, req_ids = obtain(output_token_ids), obtain(req_ids)
+        return output_token_ids, req_ids            
     
     def _remove_batch_rpc(self, batch_id):
         for conn in self.connections_:
-            output_token_ids = conn.root.remove_batch(batch_id)
-        return output_token_ids
+            is_finish = conn.root.remove_batch(batch_id)
+        return is_finish
+    
+    def _swapped_reqs_rpc(self, batch_id, swapped_req_ids):
+        for conn in self.connections_:
+            conn.root.swapped_reqs(batch_id, swapped_req_ids)
+        return True
     
     def _filter_batch_rpc(self, batch_id, req_ids):
         with concurrent.futures.ThreadPoolExecutor() as executor:
@@ -209,17 +220,17 @@ class ModelClientRPC:
         self.connections_[0].add_batch(runner_batch, batch_id)
         
     def _prefill(self, batch_id):
-        output_token_ids = self.connections_[0].prefill(batch_id)
+        output_token_ids, req_ids = self.connections_[0].prefill(batch_id)
         
-        return output_token_ids
+        return output_token_ids, req_ids
 
     def _decode(self, batch_id):
-        output_token_ids = self.connections_[0].decode(batch_id)
-        return output_token_ids
+        output_token_ids, req_ids = self.connections_[0].decode(batch_id)
+        return output_token_ids, req_ids
     
     def _remove_batch(self, batch_id):
-        output_token_ids = self.connections_[0].remove_batch(batch_id)
-        return output_token_ids
+        is_finish = self.connections_[0].remove_batch(batch_id)
+        return is_finish
     
     def _filter_batch(self, batch_id, req_ids):
         is_finish = self.connections_[0].filter_batch(batch_id, req_ids)
@@ -228,3 +239,7 @@ class ModelClientRPC:
     def _merge_batch(self, batch_id, new_batch_id):
         is_finish = self.connections_[0].merge_batch(batch_id, new_batch_id)
         return obtain(is_finish)
+    
+    def _swapped_reqs(self, batch_id, swapped_req_ids):
+        self.connections_[0].swapped_reqs(batch_id, swapped_req_ids)
+        return True

@@ -21,6 +21,7 @@ def get_no_padding_messages(input_reqs, is_prefill=True):
 
 @dataclass
 class RunnerReq:
+    id: int
     rid: str
     input_length: int
     output_length: int = 0
@@ -32,8 +33,9 @@ class RunnerReq:
     do_sample: bool = False
     
     @staticmethod
-    def create_runner_req(input_tokens: list[int], temperature: float, top_p: float, top_k: float, do_sample: bool) -> 'RunnerReq':
+    def create_runner_req(id:int, input_tokens: list[int], temperature: float, top_p: float, top_k: float, do_sample: bool) -> 'RunnerReq':
         return RunnerReq(
+            id=id,
             rid=None,
             input_length=len(input_tokens),
             input_tokens=input_tokens,
@@ -72,6 +74,7 @@ class RunnerBatch:
             request_id = message['id']
             input_tokens = message['input_tokens']
             new_req = RunnerReq.create_runner_req(
+                id=request_id,
                 input_tokens=input_tokens,
                 temperature=message['temperature'],
                 top_p=message['top_p'],
@@ -114,12 +117,13 @@ class RunnerBatch:
     def update_forward_message(self, output_token_ids):
         self.is_prefill = False
         self.output_token_ids = output_token_ids.squeeze(1)
-        print(f"output_token_ids: {output_token_ids}")
-        print(f"request_mapping: {self.request_mapping}")
+        req_ids = []
         for idx, req in enumerate(self.request_mapping.values()):
+            output_token = output_token_ids[idx].item()
+            req_ids.append(req.id)
             req.update_forward_message(output_token_ids[idx].item())
         self.input_tokens, self.position_ids, self.b_start_idx, self.b_seq_len = get_no_padding_messages(self.request_mapping.values(), self.is_prefill)
-        # self.update_reqs_message(self.b_seq_len)
+        return req_ids
         
     def update(self, new_runner_batch):
         assert self.is_prefill == False and new_runner_batch.is_prefill == False, "only decode batch can be merged"
