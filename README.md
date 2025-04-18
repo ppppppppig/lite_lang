@@ -19,7 +19,7 @@
 | v0.3  | 支持NoPadding输入与page attention，以及flash decoding | 已发布 |
 | v0.4  | 支持多TP | 已发布 |
 | v0.5  | 支持连续批处理 | 已发布 |
-| v0.6  | 支持动态批处理 | 正在开发中|
+| v0.6  | 支持动态prompt cache | 正在开发中|
 | v0.7  | 支持QwQ 32 B | 未开发
 
 
