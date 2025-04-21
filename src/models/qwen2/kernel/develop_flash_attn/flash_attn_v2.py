@@ -142,23 +142,6 @@ def triton_attention(Q, K, V, padding_mask, sm_scale=None):
     return Out
 
 
-# 标准的 Attention
-def standard_softmax_attention(Q, K, V, padding_mask, sm_scale):
-    """
-    执行标准的PyTorch softmax和attention计算。
-    """
-
-    M = torch.tril(torch.ones(Q.size(-2), K.size(-2), device="cuda"))
-    p = torch.matmul(Q * sm_scale, K.transpose(2, 3))
-    for z in range(Q.size(0)):
-        for h in range(Q.size(1)):
-            p[z, h, :, :] = torch.where(M == 1, p[z, h, :, :], float("-inf") )
-            p[z, h, :, :] = torch.where(padding_mask[z, None, None, :], p[z, h, :, :], float('-inf'))
-    p = torch.softmax(p.float(), dim=-1).half()
-    ref_out = torch.matmul(p, V)
-    return ref_out
-    
-
 @triton.jit
 def gqa_context_attention_fwd(
     Q, K, V, sm_scale, Out,
@@ -270,8 +253,6 @@ def gqa_context_attention(
     
     # 分配输出张量
     o = torch.empty_like(q)
-    print(f"fk you 0")
-    print(f"grid: {grid}")
     # 启动内核
     gqa_context_attention_fwd[grid](
         q, k, v, sm_scale, o,
@@ -289,7 +270,6 @@ def gqa_context_attention(
         num_stages=1
     )
     return o
-
 
 def standard_attention_no_pad(Q, K, V, b_start_loc, b_seq_len, kv_group_num, sm_scale):
     batch_mul_seq_len, q_heads, d_model = Q.shape
@@ -486,6 +466,255 @@ def context_attention_fwd_with_no_pad_and_kv_cache(
         num_warps=num_warps,
         num_stages=num_stages,
     )
+    
+    
+@triton.jit
+def _fwd_kernel_with_no_padding_and_kv_cache_and_prompt_cache(
+    Q,
+    K,
+    V,
+    sm_scale,
+    Out,
+    B_Start_Loc,
+    B_Seqlen,
+    Req_to_tokens,
+    B_req_idx,
+    stride_qbs,
+    stride_qh,
+    stride_qd,
+    stride_kbs,
+    stride_kh,
+    stride_kd,
+    stride_vbs,
+    stride_vh,
+    stride_vd,
+    stride_obs,
+    stride_oh,
+    stride_od,
+    stride_req_to_tokens_b,
+    stride_req_to_tokens_s,
+    b_shared_seq_len,
+    kv_group_num,
+    H: tl.constexpr,
+    BLOCK_DMODEL: tl.constexpr,
+    BLOCK_M: tl.constexpr,
+    BLOCK_N: tl.constexpr,
+):
+    start_m = tl.program_id(0)
+    cur_bh = tl.program_id(1)
+    cur_batch = cur_bh // H
+    cur_head = cur_bh % H
+
+    cur_kv_head = cur_head // kv_group_num
+
+    cur_batch_in_all_start_index = tl.load(B_Start_Loc + cur_batch)
+    cur_batch_shared_seq_len = tl.load(b_shared_seq_len + cur_batch)
+    cur_batch_seq_len = tl.load(B_Seqlen + cur_batch) - cur_batch_shared_seq_len
+    # tl.device_print("cur_batch_in_all_start_index: %d", cur_batch_in_all_start_index)
+    # tl.device_print("cur_batch_shared_seq_len: %d" ,cur_batch_shared_seq_len)
+    tl.device_print("cur_batch_seq_len: %d" ,cur_batch_seq_len)
+    cur_batch_req_idx = tl.load(B_req_idx + cur_batch)
+
+    block_start_loc = BLOCK_M * start_m
+
+    # initialize offsets
+    offs_n = tl.arange(0, BLOCK_N)
+    offs_d = tl.arange(0, BLOCK_DMODEL)
+    offs_m = block_start_loc + tl.arange(0, BLOCK_M)
+    off_q = (
+        (cur_batch_in_all_start_index + offs_m[:, None]) * stride_qbs
+        + cur_head * stride_qh
+        + offs_d[None, :] * stride_qd
+    )
+
+    q = tl.load(Q + off_q, mask=offs_m[:, None] < cur_batch_seq_len, other=0.0)
+
+    # initialize pointer to m and l
+    m_i = tl.zeros([BLOCK_M], dtype=tl.float32) - float("inf")
+    l_i = tl.zeros([BLOCK_M], dtype=tl.float32)
+    acc = tl.zeros([BLOCK_M, BLOCK_DMODEL], dtype=tl.float32)
+
+    block_mask = tl.where(block_start_loc < cur_batch_seq_len, 1, 0)
+    block_end_loc = tl.minimum(block_start_loc + BLOCK_M + cur_batch_shared_seq_len, cur_batch_seq_len + cur_batch_shared_seq_len)
+
+    # causal mask
+    for start_n in range(0, block_mask * block_end_loc, BLOCK_N):
+        start_n = tl.multiple_of(start_n, BLOCK_N)
+        # -- compute qk ----
+        kv_loc = tl.load(
+            Req_to_tokens + stride_req_to_tokens_b * cur_batch_req_idx + stride_req_to_tokens_s * (start_n + offs_n),
+            mask=(start_n + offs_n) < block_end_loc,
+            other=0,
+        )
+        off_k = kv_loc[None, :] * stride_kbs + cur_kv_head * stride_kh + offs_d[:, None] * stride_kd
+        k = tl.load(K + off_k, mask=(start_n + offs_n[None, :]) < block_end_loc, other=0.0)
+        qk = tl.dot(q, k)
+
+        mask = (offs_m[:, None] + cur_batch_shared_seq_len) >= (start_n + offs_n[None, :])
+        qk = tl.where(mask, qk * sm_scale, -1.0e8)
+        m_ij = tl.maximum(m_i, tl.max(qk, 1))
+        qk -= m_ij[:, None]
+        p = tl.math.exp2(qk)
+        l_ij = tl.sum(p, 1)
+
+        # -- update m_i and l_i
+        alpha = tl.math.exp2(m_i - m_ij)
+        l_i = l_i * alpha + l_ij
+        # -- update output accumulator --
+        acc = acc * alpha[:, None]
+        # update acc
+        off_v = kv_loc[:, None] * stride_vbs + cur_kv_head * stride_vh + offs_d[None, :] * stride_vd
+        v = tl.load(V + off_v, mask=(start_n + offs_n[:, None]) < block_end_loc, other=0.0)
+        p = p.to(v.dtype)
+        acc += tl.dot(p, v)
+        # update m_i and l_i
+        m_i = m_ij
+
+    acc = acc / l_i[:, None]
+    off_o = (
+        (cur_batch_in_all_start_index + offs_m[:, None]) * stride_obs
+        + cur_head * stride_oh
+        + offs_d[None, :] * stride_od
+    )
+    out_ptrs = Out + off_o
+    tl.store(out_ptrs, acc, mask=offs_m[:, None] < cur_batch_seq_len)
+
+
+@torch.no_grad()
+def context_attention_fwd_with_no_pad_and_kv_cache_and_prompt_cache(
+    q, k, v, o, b_req_idx, b_start_loc, b_seq_len, b_shared_seq_len, max_input_len, req_to_token_indexs
+):
+    BLOCK_M = 64
+    # shape constraints
+    Lq, Lk, Lv = q.shape[-1], k.shape[-1], v.shape[-1]
+    assert Lq == Lk and Lk == Lv
+    assert Lk in {16, 32, 64, 128, 256}
+
+    # 计算scale系数, 并乘以 1/log(2) = 1.4426950408889634,
+    # 算子内部使用 tl.math.exp2 来使计算与标准attention等价。
+    sm_scale = 1.0 / (Lq ** 0.5) * 1.4426950408889634
+    batch, head = b_seq_len.shape[0], q.shape[1]
+    kv_group_num = q.shape[1] // k.shape[1]
+
+    grid = lambda meta: (triton.cdiv(max_input_len, meta["BLOCK_M"]), batch * head, 1)
+
+    BLOCK_N = BLOCK_M
+    num_warps = 4 if Lk <= 64 else 8
+    num_stages = 1
+
+    _fwd_kernel_with_no_padding_and_kv_cache_and_prompt_cache[grid](
+        q,
+        k,
+        v,
+        sm_scale,
+        o,
+        b_start_loc,
+        b_seq_len,
+        req_to_token_indexs,
+        b_req_idx,
+        q.stride(0),
+        q.stride(1),
+        q.stride(2),
+        k.stride(0),
+        k.stride(1),
+        k.stride(2),
+        v.stride(0),
+        v.stride(1),
+        v.stride(2),
+        o.stride(0),
+        o.stride(1),
+        o.stride(2),
+        req_to_token_indexs.stride(0),
+        req_to_token_indexs.stride(1),
+        b_shared_seq_len,
+        kv_group_num=kv_group_num,
+        H=head,
+        BLOCK_DMODEL=Lk,
+        BLOCK_M=BLOCK_M,
+        BLOCK_N=BLOCK_N,
+        num_warps=num_warps,
+        num_stages=num_stages,
+    )
+
+def test_context_attention_with_kv_cache_and_prompt_cache():
+    def generate_test_data(q_heads=8, kv_heads=2, d_model=64):
+        """生成带KV缓存的测试数据"""
+        assert q_heads % kv_heads == 0, "q_heads 必须是 kv_heads 的整数倍"
+        
+        batch_size = 2
+        dtype = torch.float16
+        device = "cuda"
+        
+        # 生成序列长度和起始位置
+        seq_lens = torch.tensor([16, 32], device=device)
+        shared_lens = torch.tensor([8, 11], device=device)
+        b_start_loc = torch.tensor([0, 16], device=device)
+        total_tokens = seq_lens.sum()
+        
+        # 生成请求索引映射表（模拟KV缓存位置）
+        req_to_token = torch.zeros((batch_size, seq_lens.max()), 
+                                 dtype=torch.long, device=device)
+        for i in range(batch_size):
+            req_to_token[i, :seq_lens[i]] = b_start_loc[i] + torch.arange(seq_lens[i], device=device)
+        
+        # 生成输入张量
+        Q = torch.randn(total_tokens, q_heads, d_model, device=device, dtype=dtype)
+        K = torch.randn(total_tokens, kv_heads, d_model, device=device, dtype=dtype)
+        V = torch.randn_like(K)
+        
+        b_req_idx = torch.arange(batch_size, device=device)
+        b_start_loc_use_prompt = torch.cat([torch.tensor([0, 8], device=device), torch.cumsum(seq_lens, 0)[:-1]])
+        return Q, K, V, b_start_loc, seq_lens, req_to_token, b_req_idx, shared_lens, b_start_loc_use_prompt
+
+    # 生成测试数据
+    Q, K, V, b_start_loc, seq_lens, req_to_token, b_req_idx, b_shared_lens, b_start_loc_use_prompt = generate_test_data()
+    
+    slice_q = torch.cat([Q[8:16], Q[27:]])
+    output = torch.empty_like(slice_q)
+    def standard_attention():
+        output_ref = torch.zeros_like(Q)
+        kv_group_num = Q.size(1) // K.size(1)
+        
+        for batch in range(len(seq_lens)):
+            start = b_start_loc[batch]
+            end = start + seq_lens[batch]
+            M = torch.tril(torch.ones(seq_lens[batch], seq_lens[batch], device=Q.device, dtype=Q.dtype))
+            # 获取当前batch的token映射
+            token_indices = req_to_token[batch][:seq_lens[batch]]
+            for q_head in range(Q.size(1)):
+                kv_head = q_head // kv_group_num
+                
+                # 获取对应的K/V数据
+                k = K[token_indices, kv_head]
+                v = V[token_indices, kv_head]
+                # 计算注意力
+                q_data = Q[start: end, q_head]
+                scores = torch.matmul(q_data, k.transpose(0, 1)) * (1.0 / (Q.size(-1) ** 0.5))
+                scores = torch.where(M == 1, scores, -1.0e4)
+                scores = torch.softmax(scores, dim=-1)
+                output_ref[start: end, q_head] = torch.matmul(scores, v)
+        
+        return output_ref
+
+    # 计算标准结果
+    ref_output = standard_attention()
+    
+    context_attention_fwd_with_no_pad_and_kv_cache_and_prompt_cache(
+        q=slice_q, k=K, v=V,
+        o=output,
+        b_req_idx=b_req_idx,
+        b_start_loc=b_start_loc_use_prompt,
+        b_seq_len=seq_lens,
+        b_shared_seq_len=b_shared_lens,
+        max_input_len=seq_lens.max().item(),
+        req_to_token_indexs=req_to_token
+    )
+    
+    
+    # 验证精度
+    assert torch.allclose(output[-1], ref_output[-1], atol=1e-2), "精度验证失败！"
+    max_diff = torch.max(torch.abs(output[-1] - ref_output[-1]))
+    print(f"✅ 测试通过，最大差异：{max_diff.item():.6f}")
 
 
 def test_context_attention_with_kv_cache():
@@ -635,6 +864,22 @@ def triton_attention_no_pad():
     ), "GQA分组场景精度不匹配！"
     print("✅ GQA分组逻辑测试通过")
 
+# 标准的 Attention
+def standard_softmax_attention(Q, K, V, padding_mask, sm_scale):
+    """
+    执行标准的PyTorch softmax和attention计算。
+    """
+
+    M = torch.tril(torch.ones(Q.size(-2), K.size(-2), device="cuda"))
+    p = torch.matmul(Q * sm_scale, K.transpose(2, 3))
+    for z in range(Q.size(0)):
+        for h in range(Q.size(1)):
+            p[z, h, :, :] = torch.where(M == 1, p[z, h, :, :], float("-inf") )
+            p[z, h, :, :] = torch.where(padding_mask[z, None, None, :], p[z, h, :, :], float('-inf'))
+    p = torch.softmax(p.float(), dim=-1).half()
+    ref_out = torch.matmul(p, V)
+    return ref_out
+
 if __name__ == "__main__":
     # 创建示例数据
-    test_context_attention_with_kv_cache()
+    test_context_attention_with_kv_cache_and_prompt_cache()
