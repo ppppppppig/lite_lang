@@ -19,7 +19,7 @@
 | v0.3  | 支持NoPadding输入与page attention，以及flash decoding | 已发布 |
 | v0.4  | 支持多TP | 已发布 |
 | v0.5  | 支持连续批处理 | 已发布 |
-| v0.6  | 支持动态prompt cache | 正在开发中|
+| v0.6  | 支持动态prompt cache | 已发布|
 | v0.7  | 支持QwQ 32 B | 未开发
 
 
@@ -42,7 +42,7 @@ bash test/start_multi_req.sh
 | ----------- | ------ | ------ |
 | 1  | 使用flast attn算子时，偶发输出不对  | 已解决（flash attn算子存在越界写错误） |
 | 2  | 当组batch推理长度不同的prompt时，最长的prompt必须在batch最前，否则会崩溃  | 更新算子后已解决 |  
-| 3  | attn计算时q，k,v必须和  | 应该是flash_attn算子导致的问题，暂时不定位，后续开发kv_cache和no_padding需要更改该算子 |  
+| 3  | attn计算时q，k,v必须和  | 已解决 |  
 
 
 ### 6.需要填的小坑
