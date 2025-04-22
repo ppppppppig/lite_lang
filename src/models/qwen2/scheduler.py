@@ -198,7 +198,6 @@ class ReadyQue:
         # import pdb; pdb.set_trace()
         new_runner_batch = SchedulerRunnerQue(self.max_batch_size_, get_unique_id(), self.busy_scale_, self.max_sum_kv_tokens_)
         is_system_busy = self._is_system_busy(last_runner_batch)
-        is_system_busy = False
         self._init_cache_len(last_runner_batch.req_mappings.values(), is_system_busy)
         
         while len(self.reqs_) != 0:

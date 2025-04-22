@@ -24,6 +24,9 @@ class Qwen2PostLayer:
             start_idx = model_inputs.b_start_idx[req_idx]
             seq_len = model_inputs.b_seq_len[req_idx]
             if model_inputs.is_prefill:
+                if model_inputs.radix_cache is not None:
+
+                    seq_len = seq_len - model_inputs.b_shared_seq_len[req_idx]
                 # prefill的时候最后一位是seq_len - 1
                 after_hidden_states.append(hidden_states[start_idx + seq_len - 1, :])
             else:

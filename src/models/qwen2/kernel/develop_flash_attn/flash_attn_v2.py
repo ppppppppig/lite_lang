@@ -512,7 +512,6 @@ def _fwd_kernel_with_no_padding_and_kv_cache_and_prompt_cache(
     cur_batch_seq_len = tl.load(B_Seqlen + cur_batch) - cur_batch_shared_seq_len
     # tl.device_print("cur_batch_in_all_start_index: %d", cur_batch_in_all_start_index)
     # tl.device_print("cur_batch_shared_seq_len: %d" ,cur_batch_shared_seq_len)
-    tl.device_print("cur_batch_seq_len: %d" ,cur_batch_seq_len)
     cur_batch_req_idx = tl.load(B_req_idx + cur_batch)
 
     block_start_loc = BLOCK_M * start_m

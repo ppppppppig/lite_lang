@@ -18,6 +18,7 @@ class ModelServerRpc(rpyc.Service):
         self.model_path_ = kwargs['model_path']
         self.tp_rank_ = kwargs['tp_rank']
         self.world_size_ = kwargs['world_size']
+        # 需要加上是否开启radix_caching功能的参数
         config = kwargs['config']
         torch.cuda.set_device(self.tp_rank_)
         dist.init_process_group(
@@ -28,7 +29,7 @@ class ModelServerRpc(rpyc.Service):
         )
         self.model_runner_ = Qwen2ModelRunner(config.layer_nums, kwargs['max_batch_size'], config, model_path=kwargs['model_path'], 
                                               max_length=kwargs['max_total_length'], mem_usage=kwargs['mem_usage'], 
-                                              tp_rank=self.tp_rank_, world_size=self.world_size_, max_input_length=kwargs['max_input_length'])
+                                              tp_rank=self.tp_rank_, world_size=self.world_size_, max_input_length=kwargs['max_input_length'], use_radix_cache=kwargs['use_radix_cache'])
         self.batchs_ = {}
 
     def init_model(self):
@@ -38,7 +39,7 @@ class ModelServerRpc(rpyc.Service):
     
     def add_batch(self, req_messages, batch_id):
         batch_id = obtain(batch_id)
-        batch = RunnerBatch.create_batch(req_messages, batch_id, is_prefill=True)
+        batch = RunnerBatch.create_batch(req_messages, batch_id, is_prefill=True, radix_cache=self.model_runner_.radix_cache, kv_cache=self.model_runner_.kv_cache)
         self.batchs_[batch_id] = batch
         return True
     
@@ -49,6 +50,7 @@ class ModelServerRpc(rpyc.Service):
         return True
     
     def prefill(self, batch_id):
+
         batch_id = obtain(batch_id)
         output_token_ids = self.model_runner_.forward(self.batchs_[batch_id])
         req_ids = self.batchs_[batch_id].update_forward_message(output_token_ids)
@@ -99,13 +101,13 @@ def find_free_port():
     return sock, sock.getsockname()[1]
 
 class ModelClientRPC:
-    def __init__(self, world_size, max_batch_size, max_input_length, config, model_path, max_total_length, mem_usage):
+    def __init__(self, world_size, max_batch_size, max_input_length, config, model_path, max_total_length, mem_usage, use_radix_cache):
         
         self.connections_ = []
         self.world_size_ = world_size
         self.processor_ = []
         if self.world_size_ > 1:
-            self.create_processor(max_batch_size, config, model_path, max_total_length, mem_usage, max_input_length)   
+            self.create_processor(max_batch_size, config, model_path, max_total_length, mem_usage, max_input_length, use_radix_cache)   
             
             self.init_model = self._init_model_rpc
             self.add_batch = self._add_batch_rpc
@@ -116,7 +118,7 @@ class ModelClientRPC:
             self.merge_batch = self._merge_batch_rpc
             self.swapped_reqs = self._swapped_reqs_rpc
         else:
-            conn = ModelServerRpc(max_batch_size=max_batch_size, max_input_length=max_input_length, config=config, model_path=model_path, max_total_length=max_total_length, mem_usage=mem_usage, tp_rank=0, world_size=1)
+            conn = ModelServerRpc(max_batch_size=max_batch_size, max_input_length=max_input_length, config=config, model_path=model_path, max_total_length=max_total_length, mem_usage=mem_usage, tp_rank=0, world_size=1, use_radix_cache=use_radix_cache)
             self.connections_.append(conn)
                 
             self.init_model = self._init_model
@@ -128,7 +130,7 @@ class ModelClientRPC:
             self.merge_batch = self._merge_batch
             self.swapped_reqs = self._swapped_reqs
             
-    def create_processor(self, max_batch_size, config, model_path, max_total_length, mem_usage, max_input_length):
+    def create_processor(self, max_batch_size, config, model_path, max_total_length, mem_usage, max_input_length, use_radix_cache):
         mp.set_start_method('spawn')
         reserve_sockets = []
         free_ports = []
@@ -140,7 +142,7 @@ class ModelClientRPC:
             ready_queue = manager.Queue()
             for tp_rank in range(self.world_size_):
                 reserve_sockets[tp_rank].close()
-                p = mp.Process(target=run_server, args=(tp_rank, self.world_size_, free_ports[tp_rank], ready_queue, max_batch_size, config, model_path, max_total_length, mem_usage, max_input_length))
+                p = mp.Process(target=run_server, args=(tp_rank, self.world_size_, free_ports[tp_rank], ready_queue, max_batch_size, config, model_path, max_total_length, mem_usage, max_input_length, use_radix_cache))
                 p.start()
                 self.processor_.append(p)
             

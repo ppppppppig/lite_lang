@@ -3,6 +3,7 @@ from .layer import Qwen2TransformerLayer, Qwen2PreLayer, Qwen2PostLayer
 from .cache import Cache, PageCache
 from typing import Optional
 from safetensors import safe_open
+from .radix_cache import RadixTree
 
 class Qwen2Config:
     
@@ -85,6 +86,9 @@ class Qwen2ModelRunner:
         self.max_batch_size_ = max_batch_size
         self.max_length_ = runner_kwargs['max_length']
         self.mem_usage_ = runner_kwargs['mem_usage']
+        self.use_radix_cache_ = runner_kwargs['use_radix_cache']
+        if runner_kwargs['use_radix_cache'] == True:
+            self.radix_cache = RadixTree()
         self.layer_nums_ = layer_nums
         self.config_ = config
 
@@ -94,18 +98,41 @@ class Qwen2ModelRunner:
                 req.rid = self._add_new_req(req.input_length)
                 if req.rid is None:
                     return False
-        return self.model_ins_.forward(model_inputs, self.kv_cache_)
+                if model_inputs.radix_cache is not None and req.match_token_idxs is not None:
+                    self.kv_cache.add_refs(req.rid, req.match_token_idxs)
+        if self.radix_cache is not None:
+            self._compute_if_need_free_radix_tree(model_inputs)
+        return self.model_ins_.forward(model_inputs, self.kv_cache)
         
+    def _compute_if_need_free_radix_tree(self, model_inputs):
+        next_forward_need_token_num = model_inputs.input_tokens.size(0) if model_inputs.is_prefill else model_inputs.output_token_ids.size(0)
+        need_more_tokens = self.kv_cache.if_need_more_tokens(next_forward_need_token_num)
+        token_idxs = self.radix_cache.evict_node(need_more_tokens)
+        if token_idxs is not None:
+            self.kv_cache.free_token_idxs(token_idxs)
+        length = 0
+        length_no_shared = 0
+        for id, req in model_inputs.request_mapping.items():
+            length += req.length
+            length_no_shared += req.length - len(req.shared_tokens)
+    
     def _add_new_req(self, length):
-        if self.kv_cache_.can_allocated(length):
-            return self.kv_cache_.alloc_req()
+        if self.kv_cache.can_allocated(length):
+            return self.kv_cache.alloc_req()
         else:
             return None
     
     def free_reqs(self, reqs):
-        self.kv_cache_.dealloc_reqs(reqs)
+        if self.radix_cache is not None:
+            return
+        else:
+            self.kv_cache.dealloc_reqs(reqs)
     
     def init_model(self):
         self.model_ins_.load_weight(self.model_path_)
-        self.kv_cache_ = PageCache(self.max_batch_size_, self.max_length_, self.mem_usage_, self.layer_nums_, self.config_.head_dim, self.config_.num_key_value_heads, torch_dtype=torch.float16, tp_rank=self.tp_rank_, tp_world_size=self.world_size_)
-        return self.kv_cache_.kv_max_size_
+        self.kv_cache = PageCache(self.max_batch_size_, self.max_length_, self.mem_usage_, self.layer_nums_, self.config_.head_dim, self.config_.num_key_value_heads, torch_dtype=torch.float16, tp_rank=self.tp_rank_, tp_world_size=self.world_size_)
+        if self.use_radix_cache_:
+            self.radix_cache = RadixTree()
+        else:
+            self.radix_cache = None
+        return self.kv_cache.kv_max_size_

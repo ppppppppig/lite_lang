@@ -12,7 +12,7 @@ class Qwen2PreLayer:
         self.position_embeddings = self._ComputePosition()
         
     def Forward(self, input_tokens):
-        hidden_states = self.pre_layer_weight.input_embds[input_tokens]
+        hidden_states = torch.embedding(self.pre_layer_weight.input_embds, input_tokens, padding_idx=-1)
         return hidden_states
         
     def _ComputePosition(self):

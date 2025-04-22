@@ -105,6 +105,7 @@ class FreeReq:
         
     def alloc_new_req(self):
         if self.root_rid_.next_ is None:
+            import pdb; pdb.set_trace()
             return None
         else:
             rid = self.root_rid_.next_.rid_
@@ -112,9 +113,15 @@ class FreeReq:
         return rid
 
     def free_req(self, rid):
+        if self.root_rid_.next_ is None:
+            self.root_rid_.next_ = self.free_rid_list_[rid]
+            self.free_rid_list_[rid].next_ = None  # 补全空链表时next指针置空
+            return True
+        
         now_head_id = self.root_rid_.next_.rid_
         self.root_rid_.next_ = self.free_rid_list_[rid]
         self.free_rid_list_[rid].next_ = self.free_rid_list_[now_head_id]
+            
         return True
 
 
@@ -129,6 +136,7 @@ class PageCache:
         self.kv_max_size_ = None
         self.physical_free_token_start_ = 0
         self.physical_free_token_end_ = 0
+        
         self.token_size_ = None
         
         # 模型相关参数
@@ -156,7 +164,7 @@ class PageCache:
     
     def _init_kv_buffer(self):
         self.kv_cache_ = torch.empty((self.num_layers_, self.kv_max_size_, self.num_key_value_heads_ * 2, self.head_dim_), dtype=self.torch_dtype_).cuda()
-        self.physical_free_token_ = torch.arange(0, self.kv_max_size_, dtype=self.torch_dtype_)
+        self.physical_free_token_ = torch.arange(0, self.kv_max_size_, dtype=torch.int64)
         self.physical_free_token_start_ = 0
         self.physical_free_token_end_ = self.kv_max_size_ 
     
@@ -169,21 +177,20 @@ class PageCache:
         self.kv_max_size_ = int(self.kv_max_size_ // self.token_size_)
         assert self.kv_max_size_ > 0, "GPU memory is not enough to allocate cache."
     
-    def _alloc_token_idxs(self, rid, length, new_token_length):
-        
-        assert self.physical_free_token_start_ + new_token_length <= self.physical_free_token_end_, "no enough kv cache"
-        
-        self.req_to_tokens_[rid, length: length + new_token_length] = self.physical_free_token_[self.physical_free_token_start_: self.physical_free_token_start_ + new_token_length].cuda()
-        self.physical_free_token_start_ += new_token_length
+    def _alloc_token_idxs(self, rid, length, new_add_token_length):
+        assert self.physical_free_token_start_ + new_add_token_length  <= self.physical_free_token_end_, "no enough kv cache"
+        token_idxs = self.physical_free_token_[self.physical_free_token_start_: self.physical_free_token_start_ + new_add_token_length]
+        self.req_to_tokens_[rid, length: length + new_add_token_length] = token_idxs.cuda()
+        self.physical_free_token_start_ += new_add_token_length
     
     def _write_kv_cache(self, layer_num, rid, start, length, new_token_length, key_states, value_states):
         if layer_num == 0:
-            self._alloc_token_idxs(rid, length, new_token_length)
+            self._alloc_token_idxs(rid, length, new_token_length - length)
             
-        token_idxs = self.req_to_tokens_[rid, length: length + new_token_length]
+        token_idxs = self.req_to_tokens_[rid, length: new_token_length]
         # 这里的start应该是从b_start_loc的张量中取
-        self.kv_cache_[layer_num, token_idxs, :self.num_key_value_heads_] = key_states[start: start + new_token_length]
-        self.kv_cache_[layer_num, token_idxs, self.num_key_value_heads_:] = value_states[start: start + new_token_length]
+        self.kv_cache_[layer_num, token_idxs, :self.num_key_value_heads_] = key_states[start: start + new_token_length - length]
+        self.kv_cache_[layer_num, token_idxs, self.num_key_value_heads_:] = value_states[start: start + new_token_length - length]
     
     def alloc_req(self):
         rid = self.free_req_.alloc_new_req()
@@ -195,25 +202,33 @@ class PageCache:
         
         token_idxs = self.req_to_tokens_[rid, :length]
         self.free_token_idxs(token_idxs)
-        self.free_req_.free_req(rid)
+        self.free_rid(rid)
         return True
     
     def get_token_index(self, reqs):
         no_padding_kv_cache = []
         for req in reqs:
-            no_padding_kv_cache.append(self.req_to_tokens_[req.rid, :req.length])
+            no_padding_kv_cache.append(self.req_to_tokens_[req.rid, :req.length - 1])
         no_padding_kv_cache = torch.cat(no_padding_kv_cache, dim=0).cuda()
         return no_padding_kv_cache
-        
+    
+    def add_refs(self, rid, token_idxs):
+        self.req_to_tokens_[rid, :token_idxs.size(0)] = token_idxs
+    
     def free_token_idxs(self, token_idxs):
         assert self.physical_free_token_start_ - token_idxs.size(0) >= 0, "page cache internal error"
         self.physical_free_token_[self.physical_free_token_start_ - token_idxs.size(0): self.physical_free_token_start_] = token_idxs.cpu()
         self.physical_free_token_start_ -= token_idxs.size(0)
     
+    def free_rid(self, rid):
+        self.free_req_.free_req(rid)
+    
     def write_prefill_kv_cache(self, reqs, b_start_idx, layer_num, key_states, value_states):
         for idx, req in enumerate(reqs):
             rid = req.rid
-            length = 0
+            length = 0 
+            if req.match_token_idxs is not None:
+                length = req.match_token_idxs.size(0)
             new_token_length = req.length
             self._write_kv_cache(layer_num, rid, b_start_idx[idx].item(), length, new_token_length, key_states, value_states)
             
@@ -221,7 +236,7 @@ class PageCache:
         for idx, req in enumerate(reqs):
             rid = req.rid
             length = req.length - 1
-            new_token_length = 1
+            new_token_length = 1 + length
             self._write_kv_cache(layer_num, rid, b_start_idx[idx].item(), length, new_token_length, key_states, value_states)
         return self.get_token_index(reqs)
             
@@ -234,3 +249,6 @@ class PageCache:
             return False
         else:
             return True
+        
+    def if_need_more_tokens(self, length):
+        return self.physical_free_token_start_ + length - self.physical_free_token_end_

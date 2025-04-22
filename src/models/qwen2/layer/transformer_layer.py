@@ -5,7 +5,7 @@ from typing import Optional
 from ..kernel.develop_rope.rope import rotary_emb_fwd
 from ..kernel.develop_flash_attn.attn_decode_v2 import decode_flash_attention, gqa_decode_attention_fwd, gqa_reference_impl
 from ..kernel.develop_flash_attn.flash_decoding import token_decode_attention_flash_decoding
-from ..kernel.develop_flash_attn.flash_attn_v2 import triton_attention, gqa_context_attention, standard_attention_no_pad, context_attention_fwd_with_no_pad_and_kv_cache
+from ..kernel.develop_flash_attn.flash_attn_v2 import triton_attention, gqa_context_attention, standard_attention_no_pad, context_attention_fwd_with_no_pad_and_kv_cache, context_attention_fwd_with_no_pad_and_kv_cache_and_prompt_cache
 from ..kernel.develop_rmsnorm.rms_norm import rmsnorm
 from ..kernel.develop_silu_and_mul.silu_and_mul import silu_and_mul_fwd
 import torch.distributed as dist
@@ -137,10 +137,17 @@ class Qwen2TransformerLayer:
         else:
             if not q.is_contiguous():
                 q = q.contiguous()
-            b_req_idx = [req.rid for req in model_inputs.request_mapping.values()]
-            b_req_idx = torch.tensor(b_req_idx, dtype=torch.int32).cuda()
-            attn_score = torch.zeros_like(q)
-            context_attention_fwd_with_no_pad_and_kv_cache(q, kv_cache.kv_cache_[self.layer_idx_, :, :self.num_key_value_heads_], kv_cache.kv_cache_[self.layer_idx_, :, self.num_key_value_heads_:], attn_score, b_req_idx, model_inputs.b_start_idx, model_inputs.b_seq_len, max_input_len=model_inputs.b_seq_len.max().item(), req_to_token_indexs=kv_cache.req_to_tokens_)
+            
+            if model_inputs.radix_cache is None:
+                b_req_idx = [req.rid for req in model_inputs.request_mapping.values()]
+                b_req_idx = torch.tensor(b_req_idx, dtype=torch.int32).cuda()
+                attn_score = torch.zeros_like(q)
+                context_attention_fwd_with_no_pad_and_kv_cache(q, kv_cache.kv_cache_[self.layer_idx_, :, :self.num_key_value_heads_], kv_cache.kv_cache_[self.layer_idx_, :, self.num_key_value_heads_:], attn_score, b_req_idx, model_inputs.b_start_idx, model_inputs.b_seq_len, max_input_len=model_inputs.b_seq_len.max().item(), req_to_token_indexs=kv_cache.req_to_tokens_)
+            else:
+                b_req_idx = [req.rid for req in model_inputs.request_mapping.values()]
+                b_req_idx = torch.tensor(b_req_idx, dtype=torch.int32).cuda()
+                attn_score = torch.zeros_like(q)
+                context_attention_fwd_with_no_pad_and_kv_cache_and_prompt_cache(q, kv_cache.kv_cache_[self.layer_idx_, :, :self.num_key_value_heads_], kv_cache.kv_cache_[self.layer_idx_, :, self.num_key_value_heads_:], attn_score, b_req_idx, model_inputs.b_start_idx, model_inputs.b_seq_len, b_shared_seq_len=model_inputs.b_shared_seq_len, max_input_len=model_inputs.b_seq_len.max().item(), req_to_token_indexs=kv_cache.req_to_tokens_)
 
         attn_score = attn_score.to(torch.float32)
         attn_score = attn_score.reshape(*hidden_states_shape)
