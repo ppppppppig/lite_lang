@@ -48,8 +48,10 @@ def run_server(
     api_server.g_objs.http_server_manager = http_server_manager
     uvicorn.run("litelang.apis.test_server:api_server.app", host="0.0.0.0", port=port)
 
+
 def main():
     run_server()
+
 
 if __name__ == "__main__":
     main()

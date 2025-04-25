@@ -7,8 +7,7 @@ setup(
     author="高凌霄",
     author_email="gaolingxiao@sensetime.com",
     packages=find_packages(),
-    package_data={
-    },
+    package_data={},
     install_requires=[
         "pyzmq",
         "uvloop",
@@ -21,7 +20,7 @@ setup(
         "safetensors",
         "triton",
     ],
-    python_requires=">=3.7",
+    python_requires=">=3.9",
     classifiers=[
         "Programming Language :: Python :: 3",
         "License :: OSI Approved :: MIT License",

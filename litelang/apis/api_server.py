@@ -7,6 +7,7 @@ from .http_server_manager import HttpServerManager
 from fastapi.responses import Response, StreamingResponse
 import json
 
+
 @dataclass
 class GObjs:
     http_server_manager: HttpServerManager = None
