@@ -1,0 +1,1 @@
+python smooth_quant.py --model-path ~/LiteLang/models/Qwen2-1.5B/ --dataset-path /root/LiteLang/quantize/val.jsonl.zst --scale-output ../models/quantization_test/ --model-output ../models/quantization_qwen_test 

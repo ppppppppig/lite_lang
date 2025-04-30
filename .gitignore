@@ -9,3 +9,4 @@ build/
 dist/
 litelang.egg-info/
 .vscode
+*val.jsonl.zst
