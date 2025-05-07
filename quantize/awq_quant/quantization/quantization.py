@@ -5,10 +5,10 @@ from collections import defaultdict
 from functools import partial
 import torch.nn as nn
 from awq_quant.linear.wqlinear import WQLinear
-
+from transformers import AwqConfig
 
 class AutoQuantizer:
-    def __init__(self, model, dataset_path, tokenizer, input_len, num_samples, per_forward_batch_num, split, output_path):
+    def __init__(self, model, dataset_path, tokenizer, input_len, num_samples, per_forward_batch_num, split, output_path, zero_point, group_size):
         self.model_ = model
         self.dataset_path_ = dataset_path
         self.tokenizer_ = tokenizer
@@ -22,11 +22,13 @@ class AutoQuantizer:
         self.all_layers_, self.layer_kwargs_, self.inps_ = self.init_quant()
         
         self.w_bits = 4
+        self.zero_point = zero_point
         self.output_path_ = output_path
+        self.group_size_ = group_size
     
     def get_calib_data(self):
         dataset = load_dataset("json", data_files=self.dataset_path_, split=self.split_)
-        dataset = dataset.shuffle(seed=100)
+        dataset = dataset.shuffle(seed=42)
         all_samples = []
         for i in tqdm(range(self.num_samples_)):
             sample = dataset[i]
@@ -48,7 +50,7 @@ class AutoQuantizer:
         self.model_.model.embed_tokens .cuda()
         # 取所有请求后
         all_samples_tensor = self.get_calib_data()
-        
+        # import pdb; pdb.set_trace()
         class Catcher(nn.Module):
             def __init__(self, layer):
                 super(Catcher, self).__init__()
@@ -84,32 +86,31 @@ class AutoQuantizer:
         return all_layers, layer_kwargs, inps
     
     def quantization(self):
-        for layer in self.all_layers_:
-            
+        for idx in tqdm(range(len(self.all_layers_))):
+            layer = self.all_layers_[idx]
             # 获取该层真实输入
             feat_map = self._get_input_feat(layer)
-            
             # 使用smooth_quant的方法，迁移量化难度，并找到最佳的alpha和scale
             self._search_best_scale(layer, feat_map)
-            import pdb; pdb.set_trace()
             self._search_best_clip(layer, feat_map)
-            import pdb; pdb.set_trace()
-            print(f"nihao")
+            # import pdb; pdb.set_trace()
             self._apply_quant(layer, feat_map)
+            # import pdb; pdb.set_trace()
+            pass
             
-            
-
     def _apply_quant(self, layer, feat_map):
         linear_message_list = self._get_should_quant_linears(layer, feat_map)
-        for linear_message in linear_message_list:
-            for idx, linear in enumerate(linear_message['linears']):
-                quant_weight, scales = self._mock_quantize(linear.weight)
-
-                new_linear = WQLinear.create_wqlinear(linear=linear, scales=scales, zeros=None, 
-                                         in_features=linear.in_features, 
-                                         out_features=linear.out_features, n_bits=4)
-                new_linear = new_linear.to(linear.device)
-                self._set_op_by_name(layer, linear_message['names'][idx], new_linear)
+        for name, linear in layer.named_modules():
+            if isinstance(linear, nn.Linear):
+                quant_weight, scales, zeros = self._mock_quantize(linear.weight)
+                # import pdb; pdb.set_trace()
+                scales = scales.t().contiguous()
+                zeros = zeros.t().contiguous()
+                new_linear = WQLinear.create_wqlinear(linear=linear, scales=scales, zeros=zeros, 
+                                        in_features=linear.in_features, group_size=self.group_size_,
+                                        out_features=linear.out_features, n_bits=4)
+                new_linear = new_linear.to(next(linear.parameters()).device)
+                self._set_op_by_name(layer, name, new_linear)
             
     def _set_op_by_name(self, layer, name, new_linear):
         levels = name.split('.')
@@ -118,7 +119,7 @@ class AutoQuantizer:
         for l_idx in range(len(levels) - 1):
             current_level = levels[l_idx]
             module = getattr(module, current_level)
-        setattr(module, new_linear)
+        setattr(module, levels[-1], new_linear)
 
     def _get_input_feat(self, layer):
         feat_map = defaultdict(dict)
@@ -194,7 +195,10 @@ class AutoQuantizer:
         for linear_message in linear_message_list:
             weights = [module.weight for module in linear_message['linears']]
             w_gather = torch.cat(weights, dim=0) # [c_o * n, c_i]
+            org_w_shape = w_gather.shape
+            w_gather = w_gather.view(-1, self.group_size_)
             w_scale = w_gather.abs() / (w_gather.abs().amax(dim=1, keepdim=True) + 1e-6) # [c_o * n, c_i], 防止出现极端值
+            w_scale = w_scale.view(org_w_shape)
             w_mean = w_scale.mean(dim=0) # [c_i], per_channel
 
             inp = linear_message['inp']
@@ -216,10 +220,14 @@ class AutoQuantizer:
                 linear_message['module'].cpu()
                 original_output = original_output.clip(torch.finfo(original_type).min, torch.finfo(original_type).max)
             best_scales = self._compute_best_scales(original_output, linear_message, w_mean, a_mean, module_kwargs)
-            self._apply_scales(linear_message, best_scales)
+            self._apply_scales(linear_message, best_scales, feat_map)
     
-    def _apply_scales(self, linear_message, best_scales):
+    def _apply_scales(self, linear_message, best_scales, feat_map):
+        
+        # TODO(gaolingxiao)： 可以能还需要调整feat_map中的输入
+        
         if isinstance(linear_message['prev_ops'], nn.Linear):
+            # 这里的linear_message['prev_ops'].weight是已经经过量化了，还需要将激活量化难度迁移到权重上来
             # import pdb; pdb.set_trace()
             linear_message['prev_ops'].weight.data = torch.div(linear_message['prev_ops'].weight, best_scales.view(-1, 1))
             if hasattr(linear_message['prev_ops'], 'bias') and linear_message['prev_ops'].bias is not None:
@@ -227,24 +235,52 @@ class AutoQuantizer:
             for linear in linear_message['linears']:
                 linear.weight.data = torch.mul(linear.weight, best_scales.view(1, -1))
         else: 
+            
             for linear in linear_message['linears']:
                 linear.weight.data = torch.mul(linear.weight, best_scales)
-            linear_message['prev_ops'].weight.data = torch.div(linear_message['prev_ops'].weight, best_scales)
+            linear_message['prev_ops'].weight.data = torch.div(linear_message['prev_ops'].weight, best_scales.squeeze(0))
             if hasattr(linear_message['prev_ops'], 'bias') and linear_message['prev_ops'].bias is not None:
-                linear_message['prev_ops'].bias.data = torch.div(linear_message['prev_ops'], best_scales)
+                linear_message['prev_ops'].bias.data = torch.div(linear_message['prev_ops'].bias, best_scales.squeeze(0))
+        
+        # 因为前面的prev_ops_除了best_scales，这里也应该除以，才是真实场景
+        for layer_name in linear_message['names']:
+            if layer_name in feat_map:
+                feat_map[layer_name] = torch.div(feat_map[layer_name].cuda(), best_scales.view(1, -1).cuda())
         
     # 对称量化
     def _mock_quantize(self, weight):
-        max = weight.abs().amax(dim=1, keepdim=True)
-        int_max = 2 ** self.w_bits - 1
-        # int_min = -2 ** self.w_bits
-        scales = int_max / max
-        weight = torch.round(torch.mul(weight, scales)) / scales
-        return weight, scales
+        weight_shape = weight.shape
+        
+        if self.group_size_ > 0:
+            assert weight_shape[-1] % self.group_size_ == 0, f"org_w_shape ({weight_shape[-1]}) must be a multiple of group_size ({self.group_size_})!"
+            weight = weight.reshape(-1, self.group_size_)
+        
+        if self.zero_point:
+            max_val = weight.amax(dim=1, keepdim=True)
+            min_val = weight.amin(dim=1, keepdim=True)
+            max_int = 2 ** self.w_bits - 1
+            min_int = 0
+            scales = (max_val - min_val).clamp(min=1e-5) / max_int
+            zeros = (-torch.round(min_val / scales)).clamp_(min_int, max_int)
+            weight = (
+                torch.clamp(torch.round(weight / scales) + zeros, min_int, max_int) - zeros
+            ) * scales
+            zeros = zeros.view(weight_shape[0], -1)
+        else:
+            # 后期改动后，这一块没有测试
+            max = weight.abs().amax(dim=1, keepdim=True)
+            int_max = 2 ** (self.w_bits - 1) - 1
+            # int_min = -2 ** self.w_bits
+            scales = int_max / max
+            weight = torch.round(weight / scales) * scales # 伪量化，需要还原
+            zeros = None
+        scales = scales.view(weight_shape[0], -1)
+        weight = weight.view(weight_shape)
+        return weight, scales, zeros
     
     def _compute_best_scales(self, original_output, linear_message, w_mean, a_mean, module_kwargs):
         
-        n_grid = 3
+        n_grid = 20
         best_loss = float('inf')
         best_scales = None
         for i in range(n_grid):
@@ -309,47 +345,53 @@ class AutoQuantizer:
                         flag = True
                 if not flag:
                     should_process_linear[name] = (module)
-        import pdb; pdb.set_trace()
+        # import pdb; pdb.set_trace()
         clip_map = self._find_best_clip(should_process_linear, feat_map)
-        self._apply_clip(clip_map)
+        self._apply_clip(should_process_linear, clip_map)
     
     @torch.no_grad()
     def _apply_clip(self, should_process_linear, clip_map):
+        # import pdb; pdb.set_trace()
         for name, linear in should_process_linear.items():
             assert name in clip_map, f"{name} not in clip_map"
-            linear.weight.data = torch.clamp(linear.weight, -clip_map[name], clip_map[name])
+            org_shape = linear.weight.shape
+            linear.weight.data = linear.weight.data.reshape(*clip_map[name].shape[:2], -1)
+            linear.weight.data = torch.clamp(linear.weight.data, -clip_map[name], clip_map[name])
+            linear.weight.data = linear.weight.data.reshape(org_shape)
         
     @torch.no_grad()
     def _find_best_clip(self, should_process_linear, feat_map, n_sample_token=512):
         clip_map = {}
-        
+        # import pdb; pdb.set_trace()
         for name, linear in should_process_linear.items():
 
             w = linear.weight
+            w_shape = w.shape
             input_feat = feat_map[name]
             
-            group_size = w.size(1) 
+            group_size = self.group_size_ if self.group_size_ > 0 else w_shape[1]
             input_feat = input_feat.view(-1, input_feat.size(-1))  # [n_token, ci]
-            input_feat = input_feat.reshape(1, input_feat.size(0), 1, group_size)  # [1, n_token, 1, ci]
+            input_feat = input_feat.reshape(1, input_feat.size(0), -1, group_size)  # [1, n_token, n_group, group_size]
             
             # 下采样输入特征（与_compute_best_clip相同逻辑）
             step_size = max(1, input_feat.size(1) // n_sample_token)
-            input_feat = input_feat[:, ::step_size]  # [1, n_sample, 1, ci]
+            input_feat = input_feat[:, ::step_size]  # [1, n_sample, n_group, group_size]
             
-            w = w.view(w.size(0), 1, 1, group_size)  # [co, 1, 1, ci]
+            w = w.view(w.size(0), 1, -1, group_size)  # [co, 1, n_group, group_size]
             
             device = w.device
             input_feat = input_feat.to(device)
             
-            org_out = (input_feat * w).sum(dim=-1)  # [co, n_sample, 1]
+            org_out = (input_feat * w).sum(dim=-1)  # [co, n_sample, n_group]
             
-            org_max_val = w.abs().amax(dim=-1, keepdim=True)  # [co, 1, 1, 1]
+            org_max_val = w.abs().amax(dim=-1, keepdim=True)  # [co, 1, n_group, 1]
             best_max_val = org_max_val.clone()
             min_errs = torch.ones_like(org_max_val) * 1e9
             
-            clip_n_grid = 10 
-            for i_s in range(clip_n_grid):
-                ratio = (i_s + 1) / clip_n_grid
+            n_grid = 20
+            max_shrink = 0.5
+            for i_s in range(int(max_shrink * n_grid)):
+                ratio = (1 - i_s / n_grid)
                 max_val = org_max_val * ratio
                 min_val = -max_val
                 
@@ -357,34 +399,28 @@ class AutoQuantizer:
                 q_w = self._mock_quantize(cur_w)[0]
                 cur_out = (input_feat * q_w).sum(dim=-1)
                 
-                err = (cur_out - org_out).pow(2).mean(dim=1, keepdim=True)  # [co, 1, 1]
+                err = (cur_out - org_out).pow(2).mean(dim=1, keepdim=True).view(min_errs.shape)  # [co, 1, n_group] -> [co, 1, n_group, 1]
+                
                 cur_best_idx = err < min_errs
                 min_errs[cur_best_idx] = err[cur_best_idx]
                 best_max_val[cur_best_idx] = max_val[cur_best_idx]
-            
-            clip_map[name] = best_max_val.view(-1) 
-            
+                print(f"min_errs: {min_errs.shape}")
+            # import pdb; pdb.set_trace()
+            print(f"best_max_val: {best_max_val.shape}")
+            clip_map[name] = best_max_val.squeeze(1)
+            print(f"clip_map[name]: {clip_map[name].shape}")    
+        # import pdb; pdb.set_trace()
         return clip_map
 
     def save_models(self):
+        self.model_.config.quantization_config = AwqConfig(
+            bits=self.w_bits,
+            group_size=self.group_size_,
+            modules_to_not_convert=None,
+            zero_point=self.zero_point,
+            version="gemm"
+        )
         self.model_.save_pretrained(self.output_path_)
 
-if __name__ == "__main__":
-    
-    from transformers import AutoModelForCausalLM
-    from transformers import AutoTokenizer
-    model_for_causal_lm = AutoModelForCausalLM.from_pretrained("/root/LiteLang/models/Qwen2-1.5B")
-    tokenizer = AutoTokenizer.from_pretrained("/root/LiteLang/models/Qwen2-1.5B")
-    dataset_path = "/root/LiteLang/quantize/val.jsonl.zst"
-    quantizer = AutoQuantizer(
-        model=model_for_causal_lm,
-        dataset_path=dataset_path,
-        tokenizer=tokenizer,
-        input_len=20,
-        num_samples=3,
-        per_forward_batch_num=1,
-        split="train"
-        output_path="/root/LiteLang/models/quantize_model_qwen2-1.5B"
-    )
-    quantizer.quantization()
-    quantizer.save_models()
+
+# 冒似必须要用group_size
