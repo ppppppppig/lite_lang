@@ -73,8 +73,4 @@ class Qwen2PostLayer:
         output_tokens = torch.where(
             do_sample[:, None], output_tokens_sample, output_tokens_argmax
         )
-        if type(output_tokens) == "bool":
-            import pdb
-
-            pdb.set_trace()
         return output_tokens

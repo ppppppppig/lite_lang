@@ -4,7 +4,6 @@ from litelang.models.cache import PageCache
 from safetensors import safe_open
 from litelang.models.radix_cache import RadixTree
 
-
 class Qwen2Config:
 
     def __init__(self, config_path):
@@ -20,7 +19,6 @@ class Qwen2Config:
         self.head_dim = self.hidden_size // self.num_heads
         self.num_key_value_heads = config["num_key_value_heads"]
         self.tie_word_embeddings = config["tie_word_embeddings"]
-
 
 class Qwen2Model:
 
@@ -96,7 +94,6 @@ class Qwen2Model:
         for layer in self.layers:
             layer.layer_weight.init(state_dict)
         self.post_layer.post_layer_weight.init(state_dict)
-
 
 # 目前只支持qwen2，暂时只实现qwen2模型的Runner
 class Qwen2ModelRunner:

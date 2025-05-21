@@ -2,7 +2,7 @@ import queue
 from litelang.tools.tools import get_unique_id
 from litelang.scheduler.req_queue import Req, ReqStatus
 from litelang.scheduler.req_queue import SchedulerRunnerQue, ReadyQue
-
+import time
 
 class Scheduler:
     def __init__(
@@ -96,12 +96,16 @@ class Scheduler:
         return stop_req_ids
 
     def model_prefill(self, batch_id):
+        st_time = time.perf_counter()
         self.model_client_.add_batch(self.running_que_.get_transfer_data(), batch_id)
         output_token_ids, req_ids = self.model_client_.prefill(batch_id)
         self.update_from_forward(output_token_ids, req_ids)
+        ed_time = time.perf_counter()
+        print(f"prefill throughput: {output_token_ids.size(0) / (ed_time - st_time)} tokens/s")
         return True
 
     def model_decode(self, batch_id):
+        st_time = time.perf_counter()
         swapped_reqs = self.running_que_.try_swapped_reqs()
         if len(swapped_reqs) > 0:
             # 直接使用类似于暂停的策略即可
@@ -119,6 +123,8 @@ class Scheduler:
         if len(stop_reqs) > 0:
             stop_req_ids = [req.id for req in stop_reqs]
             self.model_client_.filter_batch(batch_id, stop_req_ids)
+        ed_time = time.perf_counter()
+        print(f"decode throughput: {output_token_ids.size(0) / (ed_time - st_time)} tokens/s")
         return True
 
     def new_update_from_forward(self, output_token_ids, req_ids):
@@ -129,11 +135,14 @@ class Scheduler:
         return stop_req_ids
 
     def new_model_prefill(self, batch_id):
+        st_time = time.perf_counter()
         self.model_client_.add_batch(
             self.new_running_que_.get_transfer_data(), batch_id
         )
         output_token_ids, req_ids = self.model_client_.prefill(batch_id)
         self.new_update_from_forward(output_token_ids, req_ids)
+        ed_time = time.perf_counter()
+        print(f"prefill throughput: {output_token_ids.size(0) / (ed_time - st_time)} tokens/s")
         return True
 
     def forward(self):
