@@ -3,17 +3,17 @@ import torch
 
 
 class MMWeight:
-    def __init__(self, weights, proj_name, bias_name):
-        self.proj = weights[proj_name].cuda().to(torch.float32)
+    def __init__(self, weights, proj_name, bias_name, torch_dtype):
+        self.proj = weights[proj_name].cuda()
         self.bias = (
-            weights[bias_name].cuda().to(torch.float32)
+            weights[bias_name].cuda().to(torch_dtype)
             if bias_name in weights
             else None
         )
 
 
 class RowMMWeight:
-    def __init__(self, weights, proj_name, bias_name, tp_rank, world_size):
+    def __init__(self, weights, proj_name, bias_name, tp_rank, world_size, torch_dtype):
         height, width = weights[proj_name].shape
         assert (
             height % world_size == 0
@@ -23,22 +23,22 @@ class RowMMWeight:
             weights[proj_name][
                 single_gpu_height * tp_rank : single_gpu_height * (tp_rank + 1)
             ]
+            .to(torch_dtype)
             .cuda()
-            .to(torch.float32)
         )
         self.bias = (
             weights[bias_name][
                 single_gpu_height * tp_rank : single_gpu_height * (tp_rank + 1)
             ]
+            .to(torch_dtype)
             .cuda()
-            .to(torch.float32)
             if bias_name in weights
             else None
         )
 
 
 class ColMMWeight:
-    def __init__(self, weights, proj_name, bias_name, tp_rank, world_size):
+    def __init__(self, weights, proj_name, bias_name, tp_rank, world_size, torch_dtype):
         height, width = weights[proj_name].shape
         assert (
             width % world_size == 0
@@ -48,15 +48,15 @@ class ColMMWeight:
             weights[proj_name][
                 :, single_gpu_width * tp_rank : single_gpu_width * (tp_rank + 1)
             ]
+            .to(torch_dtype)
             .cuda()
-            .to(torch.float32)
         )
         self.bias = (
             weights[bias_name][
                 single_gpu_width * tp_rank : single_gpu_width * (tp_rank + 1)
             ]
+            .to(torch_dtype)
             .cuda()
-            .to(torch.float32)
             if bias_name in weights
             else None
         )
@@ -64,11 +64,11 @@ class ColMMWeight:
 
 # 该算子不做切分
 class LayerNormWeight:
-    def __init__(self, weights, proj_name, bias_name, tp_rank, world_size):
-        self.proj = weights[proj_name].cuda().to(torch.float32)
+    def __init__(self, weights, proj_name, bias_name, tp_rank, world_size, torch_dtype):
+        self.proj = weights[proj_name].to(torch_dtype).cuda()
 
         self.bias = (
-            weights[bias_name].cuda().to(torch.float32)
+            weights[bias_name].to(torch_dtype).cuda()
             if bias_name in weights
             else None
         )
@@ -81,6 +81,7 @@ class Qwen2LayerWeight:
         assert world_size in (1, 2, 4, 8), "world size should be one of 1, 2, 4, 8"
         self.world_size_ = world_size
         self.tp_rank_ = tp_rank
+        self.torch_dtype = torch.float16
 
     def _init_qkv(self, weights):
         q_proj_name = f"model.layers.{self.layer_num_}.self_attn.q_proj.weight"
@@ -96,16 +97,16 @@ class Qwen2LayerWeight:
         o_bias_name = f"model.layers.{self.layer_num_}.self_attn.o_proj.bias"
 
         self.q_proj = RowMMWeight(
-            weights, q_proj_name, q_bias_name, self.tp_rank_, self.world_size_
+            weights, q_proj_name, q_bias_name, self.tp_rank_, self.world_size_, self.torch_dtype
         )
         self.k_proj = RowMMWeight(
-            weights, k_proj_name, k_bias_name, self.tp_rank_, self.world_size_
+            weights, k_proj_name, k_bias_name, self.tp_rank_, self.world_size_, self.torch_dtype
         )
         self.v_proj = RowMMWeight(
-            weights, v_proj_name, v_bias_name, self.tp_rank_, self.world_size_
+            weights, v_proj_name, v_bias_name, self.tp_rank_, self.world_size_, self.torch_dtype
         )
         self.o_proj = ColMMWeight(
-            weights, o_proj_name, o_bias_name, self.tp_rank_, self.world_size_
+            weights, o_proj_name, o_bias_name, self.tp_rank_, self.world_size_, self.torch_dtype
         )
 
     def _init_input_layernorm(self, weights):
@@ -113,7 +114,7 @@ class Qwen2LayerWeight:
         layernorm_bias = None
 
         self.layernorm = LayerNormWeight(
-            weights, layernorm_weight, layernorm_bias, self.tp_rank_, self.world_size_
+            weights, layernorm_weight, layernorm_bias, self.tp_rank_, self.world_size_, self.torch_dtype
         )
 
     def _init_post_attn_layernorm(self, weights):
@@ -123,7 +124,7 @@ class Qwen2LayerWeight:
         layernorm_bias = None
 
         self.post_attn_layernorm = LayerNormWeight(
-            weights, layernorm_weight, layernorm_bias, self.tp_rank_, self.world_size_
+            weights, layernorm_weight, layernorm_bias, self.tp_rank_, self.world_size_, self.torch_dtype
         )
 
     def _init_ffn(self, weights):
@@ -143,7 +144,7 @@ class Qwen2LayerWeight:
                 * (self.tp_rank_ + 1),
             ]
             .cuda()
-            .to(torch.float32)
+            .to(self.torch_dtype)
         )
         self.gate_proj = (
             weights[gate_weight][
@@ -153,7 +154,7 @@ class Qwen2LayerWeight:
                 :,
             ]
             .cuda()
-            .to(torch.float32)
+            .to(self.torch_dtype)
         )
         self.up_proj = (
             weights[up_weight][
@@ -163,7 +164,7 @@ class Qwen2LayerWeight:
                 :,
             ]
             .cuda()
-            .to(torch.float32)
+            .to(self.torch_dtype)
         )
 
     def init(self, weights):

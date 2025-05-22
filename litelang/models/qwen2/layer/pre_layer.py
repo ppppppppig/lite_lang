@@ -25,6 +25,6 @@ class Qwen2PreLayer:
 
         angel = pos[:, None] * freqs[None, :]
 
-        cos = torch.cos(angel).cuda().to(torch.float32)
-        sin = torch.sin(angel).cuda().to(torch.float32)
+        cos = torch.cos(angel).cuda().to(torch.float16)
+        sin = torch.sin(angel).cuda().to(torch.float16)
         return (cos, sin)

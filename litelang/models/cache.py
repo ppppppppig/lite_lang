@@ -322,7 +322,6 @@ class PageCache:
                 key_states,
                 value_states,
             )
-        return self.get_token_index(reqs)
 
     def dealloc_reqs(self, reqs):
         for req in reqs:

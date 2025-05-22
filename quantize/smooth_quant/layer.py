@@ -64,7 +64,7 @@ class W8A8BFP32OFP32LinearWithQuantScale(W8A8BFP32OFP32Linear):
         super().__init__(in_features, out_features, use_bias )
         self.register_buffer(
             "quant_scale",
-            torch.tensor(1.0, dtype=torch.float32, requires_grad=False),
+            torch.tensor(1.0, dtype=torch.float16, requires_grad=False),
         )
 
     @staticmethod
@@ -83,7 +83,7 @@ class W8A8BFP32OFP32LinearWithQuantScale(W8A8BFP32OFP32Linear):
         # 量化权重：float16 -> int8
         int8_weight, weight_scale = quantize_weight_per_channel_absmax(module.weight)
         
-        quantized.quant_scale = torch.tensor(input_scale, dtype=torch.float32).to(save_device)
+        quantized.quant_scale = torch.tensor(input_scale, dtype=torch.float16).to(save_device)
         
         quantized.weight.data = int8_weight.to(save_device)
         quantized.weight_scale.data = weight_scale.to(save_device)
