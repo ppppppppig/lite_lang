@@ -206,7 +206,7 @@ class AutoQuantizer:
             original_type = inp.dtype
             inp = inp.abs()
             inp = inp.cpu().view(-1, inp.size(-1))
-            inp = inp.to(torch.float32)
+            inp = inp.to(torch.float16)
             a_sum = inp.sum(dim=0) # [c_i], per_token
             
             a_mean = a_sum / inp.size(0)
@@ -320,7 +320,7 @@ class AutoQuantizer:
         original_output = original_output.view(-1)
         after_quantize_output = after_quantize_output.view(-1)
         
-        loss = (original_output - after_quantize_output).to(torch.float32).pow(2).sum().item()
+        loss = (original_output - after_quantize_output).to(torch.float16).pow(2).sum().item()
         return loss
 
     # 需要过滤一遍输入，否则有时会报错

@@ -19,6 +19,7 @@ from litelang.kernel.develop_flash_attn.flash_attn_v2 import (
 from litelang.kernel.develop_rmsnorm.rms_norm import rmsnorm
 from litelang.kernel.develop_silu_and_mul.silu_and_mul import silu_and_mul_fwd
 import torch.distributed as dist
+import time
 
 
 class Qwen2TransformerLayer:
@@ -39,6 +40,7 @@ class Qwen2TransformerLayer:
         self.eps = 1e-6
         self.sm_scale = 1.0 / (self.head_dim_**0.5)
         self.tp_rank_ = tp_rank
+        self.world_size_ = world_size
 
     def Forward(
         self,
@@ -48,18 +50,21 @@ class Qwen2TransformerLayer:
         kv_cache,
     ):
         residual = hidden_states
+        
         hidden_states = self._InputLayernorm(hidden_states)
         q, k, v = self._QkvCompute(hidden_states)
         hidden_states = self._ComputeAttnScore(
             q, k, v, position_embeddings, model_inputs, kv_cache
         )
-        before_hidden_states = hidden_states
-        dist.all_reduce(hidden_states, op=dist.ReduceOp.SUM)
+        if self.world_size_ > 1:
+            dist.all_reduce(hidden_states, op=dist.ReduceOp.SUM)
         hidden_states = residual + hidden_states
         residual = hidden_states
+
         hidden_states = self._FfnNorm(hidden_states)
         hidden_states = self._Ffn(hidden_states)
-        dist.all_reduce(hidden_states, op=dist.ReduceOp.SUM)
+        if self.world_size_ > 1:
+            dist.all_reduce(hidden_states, op=dist.ReduceOp.SUM)
         hidden_states = residual + hidden_states
         return hidden_states
 
@@ -69,7 +74,7 @@ class Qwen2TransformerLayer:
         )
         hidden_states = hidden_states @ gate_and_up_proj.transpose(-2, -1)
         M, N = hidden_states.shape
-        output = torch.empty((M, N // 2), dtype=torch.float32).cuda()
+        output = torch.empty((M, N // 2), dtype=torch.float16).cuda()
         silu_and_mul_fwd(hidden_states, output)
         hidden_states = output @ self.layer_weight.down_proj.transpose(-2, -1)
         return hidden_states
@@ -84,15 +89,9 @@ class Qwen2TransformerLayer:
         return output
 
     def _QkvCompute(self, input):
-        q = input @ self.layer_weight.q_proj.proj.transpose(-2, -1).to(
-            torch.float32
-        ) + self.layer_weight.q_proj.bias.to(torch.float32)
-        k = input @ self.layer_weight.k_proj.proj.transpose(-2, -1).to(
-            torch.float32
-        ) + self.layer_weight.k_proj.bias.to(torch.float32)
-        v = input @ self.layer_weight.v_proj.proj.transpose(-2, -1).to(
-            torch.float32
-        ) + self.layer_weight.v_proj.bias.to(torch.float32)
+        q = input @ self.layer_weight.q_proj.proj.transpose(-2, -1) + self.layer_weight.q_proj.bias
+        k = input @ self.layer_weight.k_proj.proj.transpose(-2, -1) + self.layer_weight.k_proj.bias
+        v = input @ self.layer_weight.v_proj.proj.transpose(-2, -1) + self.layer_weight.v_proj.bias
 
         return q, k, v
 
@@ -100,12 +99,10 @@ class Qwen2TransformerLayer:
 
         cos_seqlen = torch.index_select(cos, 0, model_inputs.position_ids)
         sin_seqlen = torch.index_select(sin, 0, model_inputs.position_ids)
-
         rotary_emb_fwd(q, k, cos_seqlen, sin_seqlen)
-
         return q, k
 
-    def CreateCausalPaddingMask(self, mask, fill_value=torch.finfo(torch.float32).min):
+    def CreateCausalPaddingMask(self, mask, fill_value=torch.finfo(torch.float16).min):
         batch_size, seq_len = mask.shape
         device = mask.device
 
@@ -123,8 +120,8 @@ class Qwen2TransformerLayer:
         attn_mask = torch.where(combined_mask, 0, fill_value).cuda()
         return attn_mask
 
-    def CreateDecodePaddingMask(self, mask, fill_value=torch.finfo(torch.float32).min):
-        attn_mask = torch.where(mask.to(torch.bool), 0, fill_value).to(torch.float32)
+    def CreateDecodePaddingMask(self, mask, fill_value=torch.finfo(torch.float16).min):
+        attn_mask = torch.where(mask.to(torch.bool), 0, fill_value).to(torch.float16)
         return attn_mask
 
     def _ComputeAttnScore(self, q, k, v, position_embeddings, model_inputs, kv_cache):
@@ -137,10 +134,6 @@ class Qwen2TransformerLayer:
         cos, sin = position_embeddings
         q, k = self._ComputeQK(q, k, cos, sin, model_inputs)
 
-        q = q.to(torch.float16)
-        k = k.to(torch.float16)
-        v = v.to(torch.float16)
-
         if model_inputs.is_prefill:
             kv_cache.write_prefill_kv_cache(
                 model_inputs.request_mapping.values(),
@@ -149,31 +142,15 @@ class Qwen2TransformerLayer:
                 k,
                 v,
             )
-            token_idxs = kv_cache.get_token_index(model_inputs.request_mapping.values())
-            after_k, after_v = (
-                kv_cache.kv_cache_[
-                    self.layer_idx_, token_idxs, : self.num_key_value_heads_
-                ],
-                kv_cache.kv_cache_[
-                    self.layer_idx_, token_idxs, self.num_key_value_heads_ :
-                ],
-            )
         else:
-            token_idxs = kv_cache.write_decode_kv_cache(
+            kv_cache.write_decode_kv_cache(
                 model_inputs.request_mapping.values(),
                 model_inputs.b_start_idx,
                 self.layer_idx_,
                 k,
                 v,
             )
-            k, v = (
-                kv_cache.kv_cache_[
-                    self.layer_idx_, token_idxs, : self.num_key_value_heads_
-                ],
-                kv_cache.kv_cache_[
-                    self.layer_idx_, token_idxs, self.num_key_value_heads_ :
-                ],
-            )
+
         if not model_inputs.is_prefill:
             if not q.is_contiguous():
                 q = q.contiguous()
@@ -229,7 +206,7 @@ class Qwen2TransformerLayer:
                     req_to_token_indexs=kv_cache.req_to_tokens_,
                 )
 
-        attn_score = attn_score.to(torch.float32)
+        attn_score = attn_score
         attn_score = attn_score.reshape(*hidden_states_shape)
         attn_score = attn_score @ self.layer_weight.o_proj.proj.transpose(-2, -1)
         if self.layer_weight.o_proj.bias is not None:
