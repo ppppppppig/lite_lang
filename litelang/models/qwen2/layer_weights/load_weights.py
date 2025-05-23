@@ -146,26 +146,20 @@ class Qwen2LayerWeight:
             .cuda()
             .to(self.torch_dtype)
         )
-        self.gate_proj = (
-            weights[gate_weight][
-                single_gpu_intermediate_size
-                * self.tp_rank_ : single_gpu_intermediate_size
-                * (self.tp_rank_ + 1),
-                :,
-            ]
-            .cuda()
-            .to(self.torch_dtype)
-        )
-        self.up_proj = (
-            weights[up_weight][
-                single_gpu_intermediate_size
-                * self.tp_rank_ : single_gpu_intermediate_size
-                * (self.tp_rank_ + 1),
-                :,
-            ]
-            .cuda()
-            .to(self.torch_dtype)
-        )
+
+        self.gate_and_up_proj = torch.cat([weights[gate_weight][
+                                            single_gpu_intermediate_size
+                                            * self.tp_rank_ : single_gpu_intermediate_size
+                                            * (self.tp_rank_ + 1),
+                                            :,
+                                        ], weights[up_weight][
+                                            single_gpu_intermediate_size
+                                            * self.tp_rank_ : single_gpu_intermediate_size
+                                            * (self.tp_rank_ + 1),
+                                            :,
+                                        ]
+                                    ]
+                , dim=0).to(device='cuda', dtype=self.torch_dtype)
 
     def init(self, weights):
         self._init_ffn(weights)

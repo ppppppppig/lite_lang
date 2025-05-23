@@ -120,16 +120,6 @@ class Qwen2ModelRunner:
         self.config_ = config
 
     def forward(self, model_inputs):
-        if model_inputs.is_prefill:
-            for req in model_inputs.request_mapping.values():
-                req.rid = self._add_new_req(req.input_length)
-                if req.rid is None:
-                    assert 1 == 0, "do not enter here"
-                if (
-                    model_inputs.radix_cache is not None
-                    and req.match_token_idxs is not None
-                ):
-                    self.kv_cache.add_refs(req.rid, req.match_token_idxs)
         if self.radix_cache is not None:
             self._compute_if_need_free_radix_tree(model_inputs)
         return self.model_ins_.forward(model_inputs, self.kv_cache)

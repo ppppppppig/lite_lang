@@ -12,16 +12,15 @@ payload = {
     "do_sample": False,
 }
 
-
 # 普通请求函数（保持原有）
 def normal_request():
+    print(f"url: {url}")
     response = requests.post(url, json=payload)
     if response.status_code == 200:
         result = response.json()
         print("普通接口结果:", result["result"])
     else:
         print("请求失败，状态码:", response.status_code)
-
 
 # 新增流式请求函数
 def stream_request():
@@ -48,8 +47,6 @@ def stream_request():
 
 # 使用示例
 if __name__ == "__main__":
-    # print("--- 普通请求 ---")
-    # normal_request()
 
     print("\n--- 流式请求 ---")
     stream_request()

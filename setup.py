@@ -11,14 +11,16 @@ setup(
     install_requires=[
         "pyzmq",
         "uvloop",
-        "torch",
         "transformers",
         "einops",
         "packaging",
         "rpyc",
         "ninja",
         "safetensors",
-        "triton",
+        "triton==2.2.0",
+        "fastapi",
+        "uvicorn",
+        "sortedcontainers"
     ],
     python_requires=">=3.9",
     classifiers=[

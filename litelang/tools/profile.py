@@ -1,5 +1,5 @@
 import torch
-
+import time
 
 def get_total_gpu_memory() -> float:
 
@@ -23,3 +23,14 @@ def get_available_gpu_memory() -> float:
     free_memory = total - reserved
 
     return free_memory / (1024**3)
+
+def measure_function_time(func):
+    def wrapper(*args, **kwargs):
+        torch.cuda.synchronize()
+        start_time = time.perf_counter()  # 记录开始时间
+        result = func(*args, **kwargs)  # 执行原函数
+        torch.cuda.synchronize()
+        end_time = time.perf_counter()  # 记录结束时间
+        print(f"函数 {func.__name__} 执行耗时: {end_time - start_time:.8f} 秒")
+        return result
+    return wrapper

@@ -11,7 +11,9 @@ def get_no_padding_messages(input_reqs, is_prefill=True):
     req_lengths = []
     start_idx = []
     shared_seq_len = []
+    rids = []
     for idx, req in enumerate(input_reqs):
+        rids.append(req.rid)
         if is_prefill:
             shared_seq_len.append(len(req.shared_tokens))
             position_ids.extend(
@@ -29,6 +31,7 @@ def get_no_padding_messages(input_reqs, is_prefill=True):
         torch.tensor(start_idx).cuda(),
         torch.tensor(req_lengths).cuda(),
         torch.tensor(shared_seq_len).cuda(),
+        torch.tensor(rids, dtype=torch.int32).cuda()
     )
 
 
@@ -91,6 +94,7 @@ class RunnerBatch:
     b_start_idx: torch.Tensor  # 每个请求的起始位置
     b_seq_len: torch.Tensor  # 每个请求的长度
     b_shared_seq_len: torch.Tensor
+    b_rids: torch.Tensor # 请求rid转成张量
     output_token_ids: torch.Tensor  # NoPadding形式的输入，decode的输入
     is_prefill: bool
     radix_cache: RadixTree
@@ -102,8 +106,9 @@ class RunnerBatch:
         req_messages,
         batch_id,
         is_prefill: bool = True,
-        radix_cache: RadixTree = None,
-        kv_cache: PageCache = None,
+        # radix_cache: RadixTree = None,
+        # kv_cache: PageCache = None,
+        model_runner = None,
     ) -> "RunnerBatch":
         # import pdb; pdb.set_trace()
         request_mapping = {}
@@ -114,8 +119,8 @@ class RunnerBatch:
             input_tokens_tensor = torch.tensor(input_tokens[:-1])
             shared_tokens = []
             match_token_idxs, has_match_len = None, None
-            if radix_cache is not None:
-                match_token_idxs, has_match_len = radix_cache.match_prefix(
+            if model_runner.radix_cache is not None:
+                match_token_idxs, has_match_len = model_runner.radix_cache.match_prefix(
                     input_tokens_tensor
                 )
                 if has_match_len > 0:
@@ -132,8 +137,18 @@ class RunnerBatch:
                 top_k=message["top_k"],
                 do_sample=message["do_sample"],
             )
-            request_mapping[request_id] = new_req
-        input_tokens, position_ids, b_start_idx, b_seq_len, b_shared_seq_len = (
+            
+            new_req.rid = model_runner._add_new_req(new_req.input_length)
+            
+            if (
+                    model_runner.radix_cache is not None
+                    and new_req.match_token_idxs is not None
+                ):
+                    model_runner.kv_cache.add_refs(new_req.rid, new_req.match_token_idxs)  
+            
+            request_mapping[request_id] = new_req 
+        
+        input_tokens, position_ids, b_start_idx, b_seq_len, b_shared_seq_len, b_rids = (
             get_no_padding_messages(request_mapping.values(), is_prefill)
         )
         return cls(
@@ -145,9 +160,10 @@ class RunnerBatch:
             b_start_idx=b_start_idx,
             b_seq_len=b_seq_len,
             b_shared_seq_len=b_shared_seq_len,
+            b_rids=b_rids,
             output_token_ids=torch.tensor([]),  # 假设 output_tokens 需要一个默认值
-            radix_cache=radix_cache,
-            kv_cache=kv_cache,
+            radix_cache=model_runner.radix_cache,
+            kv_cache=model_runner.kv_cache,
         )
 
     def get_post_sample_para(self):
@@ -203,6 +219,7 @@ class RunnerBatch:
             self.b_start_idx,
             self.b_seq_len,
             self.b_shared_seq_len,
+            self.b_rids
         ) = get_no_padding_messages(self.request_mapping.values(), is_prefill)
         self.output_token_ids = torch.tensor(new_output_token_ids).cuda()
         return should_free_reqs
@@ -221,6 +238,7 @@ class RunnerBatch:
             self.b_start_idx,
             self.b_seq_len,
             self.b_shared_seq_len,
+            self.b_rids
         ) = get_no_padding_messages(self.request_mapping.values(), self.is_prefill)
         return req_ids
 
@@ -241,6 +259,7 @@ class RunnerBatch:
             self.b_start_idx,
             self.b_seq_len,
             self.b_shared_seq_len,
+            self.b_rids
         ) = get_no_padding_messages(self.request_mapping.values(), is_prefill=False)
         self.output_token_ids = torch.tensor(new_output_token_ids).cuda()
         return True

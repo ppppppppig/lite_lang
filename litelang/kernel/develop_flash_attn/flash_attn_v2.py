@@ -530,7 +530,7 @@ def context_attention_fwd_with_no_pad_and_kv_cache(
 
     BLOCK_N = BLOCK_M
     num_warps = 4 if Lk <= 64 else 8
-    num_stages = 1
+    num_stages = 2
 
     _fwd_kernel_with_no_padding_and_kv_cache[grid](
         q,
@@ -709,7 +709,7 @@ def context_attention_fwd_with_no_pad_and_kv_cache_and_prompt_cache(
     max_input_len,
     req_to_token_indexs,
 ):
-    BLOCK_M = 64
+    BLOCK_M = 128
     # shape constraints
     Lq, Lk, Lv = q.shape[-1], k.shape[-1], v.shape[-1]
     assert Lq == Lk and Lk == Lv
@@ -725,7 +725,7 @@ def context_attention_fwd_with_no_pad_and_kv_cache_and_prompt_cache(
 
     BLOCK_N = BLOCK_M
     num_warps = 4 if Lk <= 64 else 8
-    num_stages = 1
+    num_stages = 3
 
     _fwd_kernel_with_no_padding_and_kv_cache_and_prompt_cache[grid](
         q,

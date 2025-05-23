@@ -20,6 +20,7 @@ from litelang.kernel.develop_rmsnorm.rms_norm import rmsnorm
 from litelang.kernel.develop_silu_and_mul.silu_and_mul import silu_and_mul_fwd
 import torch.distributed as dist
 import time
+from litelang.tools.profile import measure_function_time
 
 
 class Qwen2TransformerLayer:
@@ -49,10 +50,20 @@ class Qwen2TransformerLayer:
         model_inputs,
         kv_cache,
     ):
+        if self.layer_idx_ == 0:
+            if model_inputs.is_prefill:
+                
+                match_len = [len(req.match_token_idxs) if req.match_token_idxs is not None else 0 for req in model_inputs.request_mapping.values()]
+                b_match_len = torch.tensor(match_len).to(device='cuda', dtype=torch.int32)
+                model_inputs.mem_idxs = kv_cache.alloc_token_idxs(model_inputs.b_rids, b_match_len, model_inputs.b_seq_len - b_match_len)
+            else:
+                model_inputs.mem_idxs = kv_cache.alloc_token_idxs(model_inputs.b_rids, model_inputs.b_seq_len - 1, torch.ones_like(model_inputs.b_seq_len))
+
         residual = hidden_states
         
         hidden_states = self._InputLayernorm(hidden_states)
         q, k, v = self._QkvCompute(hidden_states)
+
         hidden_states = self._ComputeAttnScore(
             q, k, v, position_embeddings, model_inputs, kv_cache
         )
@@ -69,10 +80,7 @@ class Qwen2TransformerLayer:
         return hidden_states
 
     def _Ffn(self, hidden_states):
-        gate_and_up_proj = torch.cat(
-            [self.layer_weight.gate_proj, self.layer_weight.up_proj], dim=0
-        )
-        hidden_states = hidden_states @ gate_and_up_proj.transpose(-2, -1)
+        hidden_states = hidden_states @ self.layer_weight.gate_and_up_proj.transpose(-2, -1)
         M, N = hidden_states.shape
         output = torch.empty((M, N // 2), dtype=torch.float16).cuda()
         silu_and_mul_fwd(hidden_states, output)
@@ -133,29 +141,12 @@ class Qwen2TransformerLayer:
 
         cos, sin = position_embeddings
         q, k = self._ComputeQK(q, k, cos, sin, model_inputs)
-
-        if model_inputs.is_prefill:
-            kv_cache.write_prefill_kv_cache(
-                model_inputs.request_mapping.values(),
-                model_inputs.b_start_idx,
-                self.layer_idx_,
-                k,
-                v,
-            )
-        else:
-            kv_cache.write_decode_kv_cache(
-                model_inputs.request_mapping.values(),
-                model_inputs.b_start_idx,
-                self.layer_idx_,
-                k,
-                v,
-            )
+            
+        kv_cache.kv_cache_[self.layer_idx_, model_inputs.mem_idxs, : self.num_key_value_heads_] = k
+        kv_cache.kv_cache_[self.layer_idx_, model_inputs.mem_idxs, self.num_key_value_heads_ :] = v
 
         if not model_inputs.is_prefill:
-            if not q.is_contiguous():
-                q = q.contiguous()
-            b_req_idx = [req.rid for req in model_inputs.request_mapping.values()]
-            b_req_idx = torch.tensor(b_req_idx, dtype=torch.int32).cuda()
+            b_req_idx = model_inputs.b_rids
             attn_score = torch.zeros_like(q)
 
             token_decode_attention_flash_decoding(
@@ -171,13 +162,11 @@ class Qwen2TransformerLayer:
                 out=attn_score,
             )
         else:
-            if not q.is_contiguous():
-                q = q.contiguous()
 
             if model_inputs.radix_cache is None:
-                b_req_idx = [req.rid for req in model_inputs.request_mapping.values()]
-                b_req_idx = torch.tensor(b_req_idx, dtype=torch.int32).cuda()
-                attn_score = torch.zeros_like(q)
+                b_req_idx = model_inputs.b_rids
+
+                attn_score = torch.empty_like(q)
                 context_attention_fwd_with_no_pad_and_kv_cache(
                     q,
                     kv_cache.kv_cache_[self.layer_idx_, :, : self.num_key_value_heads_],
@@ -190,9 +179,8 @@ class Qwen2TransformerLayer:
                     req_to_token_indexs=kv_cache.req_to_tokens_,
                 )
             else:
-                b_req_idx = [req.rid for req in model_inputs.request_mapping.values()]
-                b_req_idx = torch.tensor(b_req_idx, dtype=torch.int32).cuda()
-                attn_score = torch.zeros_like(q)
+                b_req_idx = model_inputs.b_rids
+                attn_score = torch.empty_like(q)
                 context_attention_fwd_with_no_pad_and_kv_cache_and_prompt_cache(
                     q,
                     kv_cache.kv_cache_[self.layer_idx_, :, : self.num_key_value_heads_],

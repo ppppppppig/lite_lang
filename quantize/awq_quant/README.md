@@ -117,7 +117,7 @@ inp = linear_message['inp']
 original_type = inp.dtype
 inp = inp.abs()
 inp = inp.cpu().view(-1, inp.size(-1))
-inp = inp.to(torch.float32)
+inp = inp.to(torch.float16)
 a_sum = inp.sum(dim=0) # [c_i], per_token
 
 a_mean = a_sum / inp.size(0)
