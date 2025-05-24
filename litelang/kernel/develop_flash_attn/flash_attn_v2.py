@@ -709,7 +709,7 @@ def context_attention_fwd_with_no_pad_and_kv_cache_and_prompt_cache(
     max_input_len,
     req_to_token_indexs,
 ):
-    BLOCK_M = 128
+    BLOCK_M = 64
     # shape constraints
     Lq, Lk, Lv = q.shape[-1], k.shape[-1], v.shape[-1]
     assert Lq == Lk and Lk == Lv
@@ -856,7 +856,6 @@ def test_context_attention_with_kv_cache_and_prompt_cache():
 
     # 计算标准结果
     ref_output = standard_attention()
-
     context_attention_fwd_with_no_pad_and_kv_cache_and_prompt_cache(
         q=slice_q,
         k=K,
@@ -877,16 +876,16 @@ def test_context_attention_with_kv_cache_and_prompt_cache():
 
 
 def test_context_attention_with_kv_cache():
-    def generate_test_data(q_heads=8, kv_heads=2, d_model=64):
+    def generate_test_data(q_heads=64, kv_heads=64, d_model=128):
         """生成带KV缓存的测试数据"""
         assert q_heads % kv_heads == 0, "q_heads 必须是 kv_heads 的整数倍"
 
-        batch_size = 2
+        batch_size = 10
         dtype = torch.float16
         device = "cuda"
 
         # 生成序列长度和起始位置
-        seq_lens = torch.tensor([16, 32], device=device)
+        seq_lens = torch.tensor([800, 1600, 2400, 3200, 4000, 4800, 5600, 6400, 7200, 8000], device=device)
         b_start_loc = torch.cat(
             [torch.tensor([0, 16], device=device), torch.cumsum(seq_lens, 0)[:-1]]
         )
@@ -896,6 +895,7 @@ def test_context_attention_with_kv_cache():
         req_to_token = torch.zeros(
             (batch_size, seq_lens.max()), dtype=torch.long, device=device
         )
+
         for i in range(batch_size):
             req_to_token[i, : seq_lens[i]] = b_start_loc[i] + torch.arange(
                 seq_lens[i], device=device
@@ -972,10 +972,10 @@ def test_context_attention_with_kv_cache():
     print(f"✅ 测试通过，最大差异：{max_diff.item():.6f}")
 
 
-def triton_attention():
+def test_triton_attention():
     # 创建示例数据
-    N_CTX, D_MODEL = 32, 64
-    B, H = 1, 3
+    N_CTX, D_MODEL = 100, 64
+    B, H = 20, 64
     SM_M = 101376
     dtype = torch.float16
     Q = (
@@ -1002,6 +1002,7 @@ def triton_attention():
     while times > 0:
         times -= 1
         output = triton_attention(Q, K, V, padding_mask=padding_mask, sm_scale=sm_scale)
+
         standard_out = standard_softmax_attention(
             Q, K, V, padding_mask=padding_mask, sm_scale=sm_scale
         )

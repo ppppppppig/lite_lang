@@ -63,11 +63,12 @@ class Qwen2Model:
         # 这个读取权重的写的不是很好，后面要细化一下
         import os
         import json
-
         index_json_path = None
         if os.path.exists(os.path.join(model_path, "pytorch_model.bin.index.json")):
             index_json_path = os.path.join(model_path, "pytorch_model.bin.index.json")
-        if os.path.exists(
+        elif os.path.exists(os.path.join(model_path, "model.safetensors.index.json")):
+            index_json_path = os.path.join(model_path, "model.safetensors.index.json")
+        elif os.path.exists(
             os.path.join(model_path, "pytorch_model.safetensors.index.json")
         ):
             index_json_path = os.path.join(
@@ -82,7 +83,7 @@ class Qwen2Model:
             for key, value in index["weight_map"].items():
                 if value in have_loaded_weight:
                     continue
-                with safe_open(value, framework="pt") as f:
+                with safe_open(os.path.join(model_path, value), framework="pt") as f:
                     for key in f.keys():
                         state_dict[key] = f.get_tensor(key)
         else:

@@ -8,8 +8,8 @@ import click
 @click.option(
     "--model_path", default="/root/LiteLang/models/Qwen2-1.5B/", help="权重路径"
 )
-@click.option("--max_output_length", default=20, type=int, help="最大输出长度")
-@click.option("--max_input_length", default=20, type=int, help="最大输入长度")
+@click.option("--max_output_length", default=200, type=int, help="最大输出长度")
+@click.option("--max_input_length", default=4000, type=int, help="最大输入长度")
 @click.option("--max_batch_size", default=32, type=int, help="最大batchsize")
 @click.option("--tp", default=1, type=int, help="tp并行数")
 @click.option("--port", default=8080, type=int, help="监听端口")

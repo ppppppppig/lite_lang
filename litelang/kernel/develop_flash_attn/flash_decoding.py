@@ -272,7 +272,7 @@ def token_decode_attention_flash_decoding(
     out=None,
     alloc_tensor_func=torch.empty,
 ):
-    BLOCK_SEQ = 256
+    BLOCK_SEQ = 128
     batch_size = q.size(0)
 
     calcu_shape1 = (batch_size, q_head_num, head_dim)
