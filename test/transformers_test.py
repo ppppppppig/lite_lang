@@ -51,7 +51,7 @@ def statistics_inference(model_name, max_new_tokens, max_batch_size, every_prefi
 
 @click.command()
 @click.option(
-    "--model_path", default="/root/LiteLang/models/Qwen2.5-3B/", help="权重路径"
+    "--model_path", default="/root/LiteLang/models/Qwen2-1.5B/", help="权重路径"
 )
 @click.option("--max_prefill_length", default=600, type=int, help="最大输入长度")
 @click.option("--max_new_tokens", default=1000, type=int, help="最大输出长度")
