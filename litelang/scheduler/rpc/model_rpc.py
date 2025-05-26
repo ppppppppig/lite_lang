@@ -52,8 +52,9 @@ class ModelServerRpc(rpyc.Service):
             req_messages,
             batch_id,
             is_prefill=True,
-            radix_cache=self.model_runner_.radix_cache,
-            kv_cache=self.model_runner_.kv_cache,
+            # radix_cache=self.model_runner_.radix_cache,
+            # kv_cache=self.model_runner_.kv_cache,
+            model_runner=self.model_runner_
         )
         self.batchs_[batch_id] = batch
         return True

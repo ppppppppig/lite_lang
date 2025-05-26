@@ -51,7 +51,7 @@ class Qwen2Model:
         else:
             input_tokens = model_inputs.output_token_ids
         hidden_states = self.pre_layer.Forward(input_tokens)
-        for layer in self.layers:
+        for idx, layer in enumerate(self.layers):
             hidden_states = layer.Forward(
                 hidden_states, self.position_embeddings, model_inputs, kv_cache
             )
@@ -63,11 +63,12 @@ class Qwen2Model:
         # 这个读取权重的写的不是很好，后面要细化一下
         import os
         import json
-
         index_json_path = None
         if os.path.exists(os.path.join(model_path, "pytorch_model.bin.index.json")):
             index_json_path = os.path.join(model_path, "pytorch_model.bin.index.json")
-        if os.path.exists(
+        elif os.path.exists(os.path.join(model_path, "model.safetensors.index.json")):
+            index_json_path = os.path.join(model_path, "model.safetensors.index.json")
+        elif os.path.exists(
             os.path.join(model_path, "pytorch_model.safetensors.index.json")
         ):
             index_json_path = os.path.join(
@@ -82,7 +83,7 @@ class Qwen2Model:
             for key, value in index["weight_map"].items():
                 if value in have_loaded_weight:
                     continue
-                with safe_open(value, framework="pt") as f:
+                with safe_open(os.path.join(model_path, value), framework="pt") as f:
                     for key in f.keys():
                         state_dict[key] = f.get_tensor(key)
         else:
@@ -120,16 +121,6 @@ class Qwen2ModelRunner:
         self.config_ = config
 
     def forward(self, model_inputs):
-        if model_inputs.is_prefill:
-            for req in model_inputs.request_mapping.values():
-                req.rid = self._add_new_req(req.input_length)
-                if req.rid is None:
-                    assert 1 == 0, "do not enter here"
-                if (
-                    model_inputs.radix_cache is not None
-                    and req.match_token_idxs is not None
-                ):
-                    self.kv_cache.add_refs(req.rid, req.match_token_idxs)
         if self.radix_cache is not None:
             self._compute_if_need_free_radix_tree(model_inputs)
         return self.model_ins_.forward(model_inputs, self.kv_cache)

@@ -2,7 +2,7 @@ from setuptools import setup, find_packages
 
 setup(
     name="litelang",
-    version="0.7.0",
+    version="0.8.0",
     description="一个轻量级的大语言模型推理部署框架",
     author="高凌霄",
     author_email="gaolingxiao@sensetime.com",
@@ -11,14 +11,16 @@ setup(
     install_requires=[
         "pyzmq",
         "uvloop",
-        "torch",
         "transformers",
         "einops",
         "packaging",
         "rpyc",
         "ninja",
         "safetensors",
-        "triton",
+        "triton==2.2.0",
+        "fastapi",
+        "uvicorn",
+        "sortedcontainers"
     ],
     python_requires=">=3.9",
     classifiers=[

@@ -1,53 +1,122 @@
-### 1.背景
-
-**目前该README不能反映最新代码，后续会更新(由于最近需要兼顾面试和工作，暂时停止更新)**
-
-
-为了能够更加熟悉大语言模型推理框架的技术细节，从零开始编写大语言模型推理框架。
-
-### 2.支持模型类型
-
-| 模型类型    | 参数量 | 状态   | 备注                       |
-| ----------- | ------ | ------ | --------------------     |
-| qwen2  | 1.5B   | 已支持 |                           |
-| qwq  | 32B   | 未支持 |         预计v0.5版本支持                  |
+### 1.功能
+<div style="border-bottom: 1px solid #ddd; margin-top: -10px; margin-bottom: 10px;"></div>
 
 
-### 3.版本发布列表
+1. **性能加速**  
+   - 在Qwen2模型上实现**4倍加速比**（vs 原生Transformer）
+   - 支持**Continuous Batching**，显著提高吞吐量
 
-| 版本    | 功能 | 状态   |
-| ----------- | ------ | ------ |
-| v0.1  | 1.支持流式接口<br>2.支持qwen2-1.5B   | 已发布 |  
-| v0.2  | 开发rmsnorm/ffn/flash_attn/rope等算子，大幅提高推理性能  | 已发布 |
-| v0.3  | 支持NoPadding输入与page attention，以及flash decoding | 已发布 |
-| v0.4  | 支持多TP | 已发布 |
-| v0.5  | 支持连续批处理 | 已发布 |
-| v0.6  | 支持动态prompt cache | 已发布|
-| v0.7  | 支持QwQ 32 B | 未开发
+2. **注意力优化**  
+   - 集成`FlashAttention-1/2`与`FlashDecoding`算子
+   - 支持**NoPad Attention**机制，减少无效计算
+   - 实现**PageAttention**内存管理
+
+3. **内存优化**  
+   - **Radix Caching** KV缓存策略
+   - 动态**Tensor Parallelism**支持（2D/3D并行）
+
+4. **算子融合**  
+   - 定制化实现：
+     - `RMSNorm`层优化
+     - `ROPE`位置编码加速
+     - `SiLU_and_Mul`激活融合
 
 
-### 4.运行服务
+### 2.项目依赖
+<div style="border-bottom: 1px solid #ddd; margin-top: -10px; margin-bottom: 10px;"></div>
+以下是nvcc,pytorch,triton的版本
 
-使用以下命令运行服务
 ```
-python test/test_server.py --model-path [MODEL_PATH] --max-output-length 1024 \
---max-input-length --max-batch-size 32 --device cuda device_id 0 --port 8080
+# root@5d2906ec57d4:~/LiteLang/test# nvcc -V
+nvcc: NVIDIA (R) Cuda compiler driver
+Copyright (c) 2005-2022 NVIDIA Corporation
+Built on Wed_Sep_21_10:33:58_PDT_2022
+Cuda compilation tools, release 11.8, V11.8.89
+Build cuda_11.8.r11.8/compiler.31833905_0
+# root@5d2906ec57d4:~/LiteLang/test# pip list | grep -E "torch|triton"
+torch                                  2.7.0
+triton                                 2.2.0
+
 ```
 
-使用一下命令测试服务是否正常：
+### 3.快速使用
+<div style="border-bottom: 1px solid #ddd; margin-top: -10px; margin-bottom: 10px;"></div>
+
+#### 3.1 权重下载
+
+推荐下载[Qwen2-1.5B](https://huggingface.co/Qwen/Qwen2-1.5B/tree/main)语言模型权重，保存到/root/LiteLang/models/Qwen2-1.5B/
+
+#### 3.2 安装litelang
+使用一下命令直接安装lite_lang
 ```
-bash test/start_multi_req.sh
+apt-get install git
+pip install --user git+https://github.com/ppppppppig/lite_lang.git
+```
+或者，获取代码库，再安装
+```
+git clone git@github.com:ppppppppig/lite_lang.git
+cd lite_lang
+pip install -e .
 ```
 
-### 5.已知BUG
 
-| buglist    | 场景 | 状态   |
-| ----------- | ------ | ------ |
-| 1  | 使用flast attn算子时，偶发输出不对  | 已解决（flash attn算子存在越界写错误） |
-| 2  | 当组batch推理长度不同的prompt时，最长的prompt必须在batch最前，否则会崩溃  | 更新算子后已解决 |  
-| 3  | attn计算时q，k,v必须和  | 已解决 |  
+#### 3.3 快速启动
+```
+CUDA_VISIBLE_DEVICES litelang --model_path /root/LiteLang/models/Qwen2-1.5B/
+```
+以下是详细参数
+
+```
+#root@5d2906ec57d4:~/LiteLang# litelang --help 
+Usage: litelang [OPTIONS]
+
+Options:
+  --model_path TEXT            权重路径
+  --max_output_length INTEGER  最大输出长度
+  --max_input_length INTEGER   最大输入长度
+  --max_batch_size INTEGER     最大batchsize
+  --tp INTEGER                 tp并行数
+  --port INTEGER               监听端口
+  --mem_usage FLOAT            显存使用率
+  --max_reqs FLOAT             就绪队列最大请求数
+  --busy_scale FLOAT           系统不繁忙时减小请求的最大生成长度，尝试调度更多请求去推理
+  --use_radix_cache BOOLEAN    是否使用radix缓存
+  --help                       Show this message and exit.
+```
+
+### 4.当前性能（v0.8）
+<div style="border-bottom: 1px solid #ddd; margin-top: -10px; margin-bottom: 10px;"></div>
+
+#### 4.1 使用Qwen2.5-3B的模型进行测试
+可以使用一下命令对litelang进行性能测试，在prefill阶段，相比transformers，litelang吞吐提升了约5倍，在decode阶段, litelang吞吐提升约4倍。可以根据以下命令复现结果
+
+prefill 性能如下：
+```
+root@5d2906ec57d4:~/LiteLang/test# CUDA_VISIBLE_DEVICES=5 python generate_token.py --max_prefill_length 600 --max_new_tokens 1 --max_batch_size 40
+litelang decode throughput: 14.68683987110433 tokens/s
+
+root@5d2906ec57d4:~/LiteLang/test# CUDA_VISIBLE_DEVICES=5 python transformers_test.py --max_prefill_length 600 --max_new_tokens 1 --max_batch_size 10
+transformers decode throughput: 2.4682934601535673 tokens/s
+```
+decode 性能如下：
+```
+CUDA_VISIBLE_DEVICES=5 python generate_token.py --max_prefill_length 600 --max_new_tokens 600 --max_batch_size 40
+litelang decode throughput: 864.2122438757503 tokens/s
+
+root@5d2906ec57d4:~/LiteLang/test# CUDA_VISIBLE_DEVICES=5 python transformers_test.py --max_prefill_length 600 --max_new_tokens 600 --max_batch_size 40
+transformers decode throughput: 175.69747582720956 tokens/s
+```
+
+#### 4.2 后续性能优化方向
+
+##### 4.2.1 算子与算子之间存在较多的冗余操作
+
+目前单条请求的性能不符合预期，在3B模型上，decode阶段吞吐只有transformers的1.5倍，使用nsight查看单条请求时序图，发现page attn处出现了较大的空隙，这里应该是一个可优化空间。
+
+![litelang单条请求时序图](./images/litelang单条请求时序图.png)
+
+查看transformers的单条请求时序图, gpu没有太大的空泡
+
+![transformers单条请求时序图](./images/transformers单条请求时序图.png)
 
 
-### 6.需要填的小坑
-
-1.多进程使用rpc通信会造成较大开销，推理速度大概下降10%

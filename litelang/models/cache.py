@@ -2,7 +2,7 @@ import torch
 from abc import ABC, abstractmethod
 from litelang.tools.profile import get_available_gpu_memory
 from dataclasses import dataclass
-
+from litelang.tools.profile import measure_function_time
 
 def get_dtype_size(dtype):
     if dtype == torch.bool:
@@ -204,7 +204,7 @@ class PageCache:
             dtype=self.torch_dtype_,
         ).cuda()
         self.physical_free_token_ = torch.arange(
-            0, self.kv_max_size_, dtype=torch.int64
+            0, self.kv_max_size_, dtype=torch.int32
         )
         self.physical_free_token_start_ = 0
         self.physical_free_token_end_ = self.kv_max_size_
@@ -221,27 +221,37 @@ class PageCache:
         )
         self.kv_max_size_ = int(self.kv_max_size_ // self.token_size_)
         assert self.kv_max_size_ > 0, "GPU memory is not enough to allocate cache."
+    
+    def alloc_token_idxs(self, b_rids, b_length, b_new_add_token_length):
 
-    def _alloc_token_idxs(self, rid, length, new_add_token_length):
+        total_new_tokens = b_new_add_token_length.sum().item()
+
         assert (
-            self.physical_free_token_start_ + new_add_token_length
+            self.physical_free_token_start_ + total_new_tokens
             <= self.physical_free_token_end_
-        ), "no enough kv cache"
+        ), "No enough KV cache space"
+
         token_idxs = self.physical_free_token_[
-            self.physical_free_token_start_ : self.physical_free_token_start_
-            + new_add_token_length
-        ]
-        self.req_to_tokens_[rid, length : length + new_add_token_length] = (
-            token_idxs.cuda()
-        )
-        self.physical_free_token_start_ += new_add_token_length
+            self.physical_free_token_start_ : self.physical_free_token_start_ + total_new_tokens
+        ].cuda()
+        self.physical_free_token_start_ += total_new_tokens
+        split_points = torch.cat([
+            torch.tensor([0], dtype=torch.int32, device=b_rids.device),
+            torch.cumsum(b_new_add_token_length, dim=0)
+        ])
+
+        global_offsets = torch.arange(total_new_tokens, dtype=torch.int32, device=b_rids.device)
+        request_indices = torch.bucketize(global_offsets, split_points, right=True) - 1
+        rows = b_rids[request_indices]
+        start_offsets = split_points[request_indices]
+        cols = b_length[request_indices] + (global_offsets - start_offsets)
+        self.req_to_tokens_[rows, cols] = token_idxs
+        return token_idxs
+    
 
     def _write_kv_cache(
         self, layer_num, rid, start, length, new_token_length, key_states, value_states
     ):
-        if layer_num == 0:
-            self._alloc_token_idxs(rid, length, new_token_length - length)
-
         token_idxs = self.req_to_tokens_[rid, length:new_token_length]
         # 这里的start应该是从b_start_loc的张量中取
         self.kv_cache_[layer_num, token_idxs, : self.num_key_value_heads_] = key_states[
