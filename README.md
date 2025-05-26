@@ -1,6 +1,4 @@
-### 1.功能
-<div style="border-bottom: 1px solid #ddd; margin-top: -10px; margin-bottom: 10px;"></div>
-
+# 1.功能
 
 1. **性能加速**  
    - 在Qwen2模型上实现**4倍加速比**（vs 原生Transformer）
@@ -22,8 +20,8 @@
      - `SiLU_and_Mul`激活融合
 
 
-### 2.项目依赖
-<div style="border-bottom: 1px solid #ddd; margin-top: -10px; margin-bottom: 10px;"></div>
+# 2.项目依赖
+
 以下是nvcc,pytorch,triton的版本
 
 ```
@@ -39,14 +37,13 @@ triton                                 2.2.0
 
 ```
 
-### 3.快速使用
-<div style="border-bottom: 1px solid #ddd; margin-top: -10px; margin-bottom: 10px;"></div>
+# 3.快速使用
 
-#### 3.1 权重下载
+## 3.1 权重下载
 
 推荐下载[Qwen2-1.5B](https://huggingface.co/Qwen/Qwen2-1.5B/tree/main)语言模型权重，保存到/root/LiteLang/models/Qwen2-1.5B/
 
-#### 3.2 安装litelang
+## 3.2 安装litelang
 使用一下命令直接安装lite_lang
 ```
 apt-get install git
@@ -60,7 +57,7 @@ pip install -e .
 ```
 
 
-#### 3.3 快速启动
+## 3.3 快速启动
 ```
 CUDA_VISIBLE_DEVICES litelang --model_path /root/LiteLang/models/Qwen2-1.5B/
 ```
@@ -84,10 +81,9 @@ Options:
   --help                       Show this message and exit.
 ```
 
-### 4.当前性能（v0.8）
-<div style="border-bottom: 1px solid #ddd; margin-top: -10px; margin-bottom: 10px;"></div>
+# 4.当前性能（v0.8）
 
-#### 4.1 使用Qwen2.5-3B的模型进行测试
+## 4.1 使用Qwen2.5-3B的模型进行测试
 可以使用一下命令对litelang进行性能测试，在prefill阶段，相比transformers，litelang吞吐提升了约5倍，在decode阶段, litelang吞吐提升约4倍。可以根据以下命令复现结果
 
 prefill 性能如下：
@@ -107,9 +103,9 @@ root@5d2906ec57d4:~/LiteLang/test# CUDA_VISIBLE_DEVICES=5 python transformers_te
 transformers decode throughput: 175.69747582720956 tokens/s
 ```
 
-#### 4.2 后续性能优化方向
+## 4.2 后续性能优化方向
 
-##### 4.2.1 算子与算子之间存在较多的冗余操作
+### 4.2.1 算子与算子之间存在较多的冗余操作
 
 目前单条请求的性能不符合预期，在3B模型上，decode阶段吞吐只有transformers的1.5倍，使用nsight查看单条请求时序图，发现page attn处出现了较大的空隙，这里应该是一个可优化空间。
 
