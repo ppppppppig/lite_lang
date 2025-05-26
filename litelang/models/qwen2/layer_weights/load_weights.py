@@ -22,7 +22,7 @@ class RowMMWeight:
         self.proj = (
             weights[proj_name][
                 single_gpu_height * tp_rank : single_gpu_height * (tp_rank + 1)
-            ]
+            ].transpose(0, 1)
             .to(torch_dtype)
             .cuda()
         )
@@ -47,7 +47,7 @@ class ColMMWeight:
         self.proj = (
             weights[proj_name][
                 :, single_gpu_width * tp_rank : single_gpu_width * (tp_rank + 1)
-            ]
+            ].transpose(0, 1)
             .to(torch_dtype)
             .cuda()
         )
@@ -99,12 +99,21 @@ class Qwen2LayerWeight:
         self.q_proj = RowMMWeight(
             weights, q_proj_name, q_bias_name, self.tp_rank_, self.world_size_, self.torch_dtype
         )
-        self.k_proj = RowMMWeight(
+
+        k_proj = RowMMWeight(
             weights, k_proj_name, k_bias_name, self.tp_rank_, self.world_size_, self.torch_dtype
         )
-        self.v_proj = RowMMWeight(
+        v_proj = RowMMWeight(
             weights, v_proj_name, v_bias_name, self.tp_rank_, self.world_size_, self.torch_dtype
         )
+        
+        self.kv_proj_weight = torch.cat([k_proj.proj, v_proj.proj], dim=1)
+        if k_proj.bias is not None and v_proj.bias is not None:
+            self.kv_proj_bias = torch.cat([k_proj.bias, v_proj.bias], dim=0)
+        elif k_proj.bias is None and v_proj.bias is None:
+            self.kv_proj_bias = None
+        else:
+            raise ValueError("Either both k_proj and v_proj must have a bias, or neither.")
         self.o_proj = ColMMWeight(
             weights, o_proj_name, o_bias_name, self.tp_rank_, self.world_size_, self.torch_dtype
         )
@@ -143,6 +152,7 @@ class Qwen2LayerWeight:
                 * self.tp_rank_ : single_gpu_intermediate_size
                 * (self.tp_rank_ + 1),
             ]
+            .transpose(0, 1)
             .cuda()
             .to(self.torch_dtype)
         )
@@ -152,14 +162,14 @@ class Qwen2LayerWeight:
                                             * self.tp_rank_ : single_gpu_intermediate_size
                                             * (self.tp_rank_ + 1),
                                             :,
-                                        ], weights[up_weight][
+                                        ].transpose(0, 1), weights[up_weight][
                                             single_gpu_intermediate_size
                                             * self.tp_rank_ : single_gpu_intermediate_size
                                             * (self.tp_rank_ + 1),
                                             :,
-                                        ]
+                                        ].transpose(0, 1)
                                     ]
-                , dim=0).to(device='cuda', dtype=self.torch_dtype)
+                , dim=1).to(device='cuda', dtype=self.torch_dtype)
 
     def init(self, weights):
         self._init_ffn(weights)

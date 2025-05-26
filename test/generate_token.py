@@ -54,20 +54,21 @@ def statistics_inference(model_path, decode_nums, max_batch_size, every_prefill_
         is_prefill=True,
         model_runner=model_runner
     )
-    model_name="/root/LiteLang/models/Qwen2.5-3B/"
-    tokenizer = AutoTokenizer.from_pretrained(model_name, use_fast=False)
+    
     torch.cuda.synchronize()
     st_time = time.perf_counter()
+    # torch.cuda.profiler.start()
     for i in range(0, decode_nums):
         output_token_ids = model_runner.forward(batch)
         batch.update_forward_message(output_token_ids)
-        torch.cuda.synchronize()
+    # torch.cuda.profiler.stop()
+    torch.cuda.synchronize()
     ed_time = time.perf_counter()
     print(f"decode throughput: {(decode_nums * max_batch_size) / (ed_time - st_time)} tokens/s")
     
 @click.command()
 @click.option(
-    "--model_path", default="/root/LiteLang/models/Qwen2-1.5B/", help="权重路径"
+    "--model_path", default="/root/LiteLang/models/Qwen2.5-3B/", help="权重路径"
 )
 @click.option("--max_prefill_length", default=600, type=int, help="最大输入长度")
 @click.option("--max_new_tokens", default=1000, type=int, help="最大输出长度")

@@ -51,7 +51,7 @@ class Qwen2Model:
         else:
             input_tokens = model_inputs.output_token_ids
         hidden_states = self.pre_layer.Forward(input_tokens)
-        for layer in self.layers:
+        for idx, layer in enumerate(self.layers):
             hidden_states = layer.Forward(
                 hidden_states, self.position_embeddings, model_inputs, kv_cache
             )

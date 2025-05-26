@@ -36,12 +36,14 @@ def statistics_inference(model_name, max_new_tokens, max_batch_size, every_prefi
     torch.cuda.synchronize()
     st_time = time.perf_counter()
     # 进行推理
+    # torch.cuda.profiler.start()
     with torch.no_grad():
         outputs = model.generate(
             input_ids=input_ids,
             max_new_tokens=max_new_tokens,
             do_sample=False
         )
+    # torch.cuda.profiler.end()
     torch.cuda.synchronize()
     ed_time = time.perf_counter()
     print(f"decode throughput: {(max_new_tokens * max_batch_size) / (ed_time - st_time)} tokens/s")
@@ -49,7 +51,7 @@ def statistics_inference(model_name, max_new_tokens, max_batch_size, every_prefi
 
 @click.command()
 @click.option(
-    "--model_path", default="/root/LiteLang/models/Qwen2-1.5B/", help="权重路径"
+    "--model_path", default="/root/LiteLang/models/Qwen2.5-3B/", help="权重路径"
 )
 @click.option("--max_prefill_length", default=600, type=int, help="最大输入长度")
 @click.option("--max_new_tokens", default=1000, type=int, help="最大输出长度")

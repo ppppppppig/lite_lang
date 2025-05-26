@@ -318,7 +318,7 @@ def test_flash_decoding():
     kv_head_num = 2
     head_dim = 64
     torch_dtype = torch.float16
-    b_seq_len = torch.tensor([16, 32, 64]).cuda()
+    b_seq_len = torch.tensor([1000, 2000, 3000]).cuda()
     seq_len_cum = b_seq_len.sum()
     Q = torch.randn((batch_size, q_head_num, head_dim), dtype=torch_dtype).cuda()
     K = torch.randn((seq_len_cum, kv_head_num, head_dim), dtype=torch_dtype).cuda()
@@ -333,7 +333,7 @@ def test_flash_decoding():
     out_flas_decoding = torch.empty_like(Q)
     token_decode_attention_flash_decoding(
         Q,
-        Req_to_tokens,
+        Req_to_tokens,  
         B_req_idx,
         b_seq_len,
         max_len_in_batch,
